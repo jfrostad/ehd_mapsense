@@ -7,7 +7,7 @@
 
 # ----FUNCTIONS---------------------------------------------------------------------------------------------------------
 #custom function to build the EHD rankings, ported from chris' dplyr code (see scrap)
-cleanAndRank <- function(dir, path,
+rankeR <- function(dir, path,
                          nranks=10, 
                          clean_names=F,
                          debug=F) {

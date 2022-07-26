@@ -101,8 +101,8 @@ road_sf <- primary_secondary_roads(state='WA') %>%
 places_sf <- places(state = 'WA', cb = T) 
 
 #first read in and calculate all the ranks using custom function
-ranks_old <- cleanAndRank(dir=data.dir, path=data_extract_EHDv1, clean_names=item_map, debug=F)
-ranks_new <- cleanAndRank(dir=data.dir, path=data_extract_EHDv2)
+ranks_old <- rankeR(dir=data.dir, path=data_extract_EHDv1, clean_names=item_map, debug=F)
+ranks_new <- rankeR(dir=data.dir, path=data_extract_EHDv2)
 
 ##create comparisons##
 #merge measures (old v. new) to compare

@@ -1,7 +1,7 @@
 # ----HEADER------------------------------------------------------------------------------------------------------------
 # Author: JF
-# Date: 04/08/2020
-# Purpose: Produce HAP paper results
+# Date: 04/08/2022
+# Purpose: Prepare EHD rankings from raw data, explore and analyze sensitivity
 # source("/homes/jfrostad/_code/lbd/hap/cooking/rover/opportunity.R", echo=T)
 #***********************************************************************************************************************
 
@@ -9,52 +9,24 @@
 # clear memory
 rm(list=ls())
 
-# runtime configuration
-if (Sys.info()["sysname"] == "Linux") {
-  j_root <- "/home/j/"
-  h_root <- "/homes/jfrostad/"
-  arg <- commandArgs()[-(1:3)] # First args are for unix use only
-  
-  if (length(arg)==0) {
-    # arg <- c("IND", #current project iteration
-    #          "8", #output version
-    #          1) #number of cores provided to multicore functions
-  }
-  
-} else {
-  j_root <- "J:"
-  h_root <- "H:"
-  # arg <- c("IND", #current project iteration
-  #          "4", #output version
-  #          1) #number of cores provided to multicore functions
-}
-
+#set opts
+options(scipen=999) #readability
 #use cairo to render instead of quartz (quartz causes big slowdowns with geom_sf)
 if(!identical(getOption("bitmapType"), "cairo") && isTRUE(capabilities()[["cairo"]])){
   options(bitmapType = "cairo")
 }
 
-#set opts
-options(scipen=999) #readability
-
-## Set core_repo location and indicator group
+## Set core_repo location
 user            <- Sys.info()['user']
-my_repo         <- '/homes/jfrostad/_code/ehd_mapping'
+my_repo         <- ifelse(Sys.info()["sysname"] == "Linux",
+                          file.path('/homes', user, ''),
+                          file.path('C:/Users', user, 'Documents/ehd_mapsense'))
 
 #load packages
+#TODO only relevant to running in linux on shared cluster
 package_lib    <- sprintf('%s_code/_lib/pkg_R',h_root)
 ## Load libraries and  MBG project functions.
 .libPaths(package_lib)
-
-#--------------------------------------------------------
-# Purpose: re-create IBL ranks & QA observed vs expected ranks
-# Author: Christopher Ahmed (christopher.ahmed@doh.wa.gov)
-# Date: January 2022
-#
-# Note: this script reads in a data extract created from the backend
-#   of WTN. The extract includes all the data IBL uses to create its ranks
-#   the extract is a long data-set as opposed to wide.
-#--------------------------------------------------------
 
 pacman::p_load(tidyverse, readxl, snakecase, janitor, data.table, naniar, visdat,
                magrittr, scales, ggplot2, ggpubr, ggridges, ggrepel, gridExtra, isoband, RColorBrewer, 
@@ -67,20 +39,19 @@ pacman::p_load(tidyverse, readxl, snakecase, janitor, data.table, naniar, visdat
 # ----IN/OUT------------------------------------------------------------------------------------------------------------
 ###Input###
 #raw data
-main.dir <- file.path('/mnt/share/scratch/users/jfrostad/ehd_mapping/')
-data.dir <- file.path(main.dir, 'data')
-local.dir <- file.path('C:/Users/jfrostad/Downloads/Datafiles_EHDMapv2.0_AllCTs/Data All CTs')
-data.dir <- file.path(main.dir, 'data')
+code.dir <- file.path(my_repo, '_code')
+data.dir <- file.path(my_repo, 'data')
 data_extract_EHDv1 <- 'ehd_data_v1.xlsx' #TODO rename
 data_extract_EHDv2 <- 'ehd_data_v3.xlsx' #TODO rename
 
 ###Output###
-out.dir <- file.path('C:/Users/jfrostad/Desktop/shiny_app/data')
-viz.dir  <- file.path(local.dir, 'viz')
+out.dir <- file.path(my_repo, 'output')
+viz.dir  <- file.path(my_repo, 'viz')
 #***********************************************************************************************************************
 
 # ---FUNCTIONS----------------------------------------------------------------------------------------------------------
-#test space
+#library of functions specific to this script
+#TODO eventually port out to library
 cleanAndRank <- function(dir, path,
                          nranks=10, 
                          clean_names=F,
@@ -120,7 +91,8 @@ cleanAndRank <- function(dir, path,
     .[rank==-1, rank := NA] %>% 
     .[rankcalculatedvalue==-1, rankcalculatedvalue := NA] %>% 
     .[, .(GEOID=as.character(geocode), item=itemname, theme=themename, measure_rank=rank, 
-          measure_rank_val=rankcalculatedvalue)]
+          measure_rank_val=rankcalculatedvalue,
+          level=3)] #lowest level of aggregation
   
   index_dt <- extract_index %>% 
     setnames(., names(.), names(.) %>% tolower) %>% 
@@ -172,7 +144,8 @@ cleanAndRank <- function(dir, path,
     .[, measure_rank_sum := sum(measure_rank_integer), by=.(GEOID, theme)] %>% 
     .[, measure_rank_sum := sum(measure_rank_integer), by=.(GEOID, theme)] %>% 
     unique(., by=c('GEOID', 'theme')) %>% 
-    .[, item := ''] %>%  #item no longer relevant after collapse
+    .[, item := 'Aggregated'] %>%  #item no longer relevant after collapse
+    .[, level := 2] %>%  #second level of aggregation
     #TODO ranking could be better as a function??
     .[, theme_avg_rank := round_half_up(measure_rank_sum/measure_num, 2), by=theme] %>% 
     .[, theme_rank_order := frank(theme_avg_rank, 
@@ -204,8 +177,9 @@ cleanAndRank <- function(dir, path,
     .[!(theme%like%'Environmental'), pop_avg := mean(weighted_ranks), by=GEOID] %>% 
     setnafill(type='nocb', cols='pop_avg') %>%  #env ordered first, so carry back
     unique(., by=c('GEOID')) %>% 
-    .[, item := ''] %>%  #theme and item no longer relevant after collapse
-    .[, theme := ''] %>%  #theme and item no longer relevant after collapse
+    .[, item := 'Aggregated'] %>%  #theme and item no longer relevant after collapse
+    .[, theme := 'Aggregated'] %>%  #theme and item no longer relevant after collapse
+    .[, level := 1] %>%  #highest level of aggregation
     #scale both per cal enviroscreen standard
     .[, burden_scaled := burden_avg / max(burden_avg) * 10] %>% 
     .[, pop_scaled := pop_avg / max(pop_avg) * 10] %>% 
@@ -241,165 +215,7 @@ cleanAndRank <- function(dir, path,
   
 }
 
-#helper function to copy things out of R
-writeExcel <- function(x,row.names=FALSE,col.names=TRUE,...) {
-  write.table(x,"clipboard",sep="\t",row.names=row.names,col.names=col.names,...)
-}
-
-#label outliers statistically
-is_outlier <- function(x) {
-  return(x < quantile(x, 0.25, na.rm=T) - 1.5 * IQR(x, na.rm=T) | x > quantile(x, 0.75, na.rm=T) + 1.5 * IQR(x, na.rm=T))
-}
-
-#***********************************************************************************************************************
-
-# ---PREP DATA----------------------------------------------------------------------------------------------------------
-##read in and prep datasets for analysis##
-#names of themes have changed, make a map
-item_map <- file.path(local.dir, 'ehd_map_theme_names.csv') %>% fread
-
-#life expectancy data
-le_dt <-  file.path(local.dir, 'le_at_birth_2015_2019.csv') %>% fread
-setnames(le_dt, names(le_dt), 
-         c('county', 'geocode', 'le', 'lower', 'upper'))
-le_dt[, c('le', 'lower', 'upper') := lapply(.SD, as.numeric), .SDcols=c('le', 'lower', 'upper')]
-
-#also bring in the census tracts shapefile in order to do some cartography
-#can be downloaded from the census website using tigris
-tract_sf <- tracts('WA', cb=T) #%>% 
-  #st_transform(32148) #%>% 
-  #erase_water(area_threshold = 0.9) #intersect with water overlay and remove
-
-# tract_sf <- file.path(local.dir, 'shapefile', 'tl_2010_53_tract10.shp') %>% 
-#   st_read
-
-#use the water shapefile as an overlay
-counties_list <- counties('WA', cb=T)
-water_sf <- area_water('WA', counties_list$COUNTYFP %>% unique) %>% 
-  st_simplify(preserveTopology = TRUE, dTolerance = 100)
-
-#also overlay roads
-road_sf <- primary_secondary_roads(state='WA') %>% 
-  st_simplify(preserveTopology = TRUE, dTolerance = 100)
-
-#also overlay places
-  places_sf <- places(state = 'WA', cb = T) 
-
-#first read in and calculate all the ranks
-ranks_old <- cleanAndRank(dir=local.dir, path=data_extract_EHDv1, clean_names=item_map, debug=F)
-ranks_new <- cleanAndRank(dir=local.dir, path=data_extract_EHDv2)
-
-#merge measures (old v. new) to compare
-measure_ranks <- merge(ranks_old$measure[, .(GEOID, item, theme, 
-                                          measure_old=measure_rank_integer)],
-                    ranks_new$measure[, .(GEOID, item, theme, 
-                                          measure_new=measure_rank_integer),],
-                    by=c('GEOID', 'item', 'theme'), all = T) %>% 
-  .[, measure_shift := measure_new-measure_old] %>% 
-  #.[, avg_shift := mean(measure_shift, na.rm=T), by='item'] %>% 
-  #.[, measure_old_neg := measure_old * -1] %>% 
-  .[, measure_shift_capped := measure_shift] %>% 
-  .[measure_shift>=5, measure_shift_capped := 5] %>% 
-  .[measure_shift<=-5, measure_shift_capped := -5]  %>% 
-  .[, measure_shift := measure_shift_capped] %>% 
-  .[, measure_shift_capped := NULL]
-  
-
-#merge raw measures (old v. new) to compare
-measure_raw <- merge(ranks_old$measure_raw[, .(GEOID, item, theme, 
-                                             measure_old=measure_rank_val)],
-                       ranks_new$measure[, .(GEOID, item, theme, 
-                                             measure_new=measure_rank_val)],
-                       by=c('GEOID', 'item', 'theme'), all=T) %>% 
-  .[, measure_shift_raw := measure_new-measure_old] %>% 
-  #.[, avg_shift := mean(measure_shift_raw, na.rm=T), by='item'] %>% 
-  #.[, measure_old_neg := measure_old * -1] %>% 
-  setnames(., c('measure_new', 'measure_old'), c('measure_new_raw', 'measure_old_raw'))
-
-#merge both measures datasets
-measure_dt <- merge(measure_ranks,
-                    measure_raw[, .(GEOID, item, measure_old_raw, measure_new_raw, measure_shift_raw)],
-                    by=c('GEOID', 'item'))
-
-#merge themes
-theme_dt <- merge(ranks_old$theme[, .(GEOID, item, theme, 
-                                      index_old=theme_rank_integer)],
-                  ranks_new$theme[, .(GEOID, item, theme, 
-                                      index_new=theme_rank_integer)],
-                  by=c('GEOID', 'item', 'theme')) %>% 
-  .[, index_shift := index_new-index_old] %>% 
-  .[, index_shift_capped := index_shift] %>% 
-  .[index_shift>=5, index_shift_capped := 5] %>% 
-  .[index_shift<=-5, index_shift_capped := -5]  %>% 
-  .[, index_shift := index_shift_capped] %>% 
-  .[, index_shift_capped := NULL]
-
-#merge indexes (old v. new) to compare
-index_dt <- merge(ranks_old$index[, .(GEOID, item, theme, 
-                                          index_old=index_rank_integer)],
-                    ranks_new$index[, .(GEOID, item, theme, 
-                                          index_new=index_rank_integer)],
-                    by=c('GEOID', 'item', 'theme')) %>% 
-  .[, index_shift := index_new-index_old] %>% 
-  .[, index_shift_capped := index_shift] %>% 
-  .[index_shift>=5, index_shift_capped := 5] %>% 
-  .[index_shift<=-5, index_shift_capped := -5] %>% 
-  .[, index_shift := index_shift_capped] %>% 
-  .[, index_shift_capped := NULL]
-
-#identify dropouts
-threshold_val <- 9
-index_dt[, impacted_new := 0]
-index_dt[, impacted_old := 0]
-index_dt[index_new>=threshold_val, impacted_new := 1]
-index_dt[index_old>=threshold_val, impacted_old := 1]
-index_dt[, dropout := as.factor(impacted_old - impacted_new)]
-
-#add life expectancy data
-index_dt <- merge(index_dt, le_dt, by.x='GEOID', by.y='geocode')
-index_dt[, le_state_average := mean(le, na.rm=T)]
-index_dt[, life_expectancy := paste0(le, ' years (', lower, '-', upper, ')')]
-
-#merge the dropouts back onto the other tables for graphing
-measure_dt <- merge(measure_dt, index_dt[, .(GEOID, dropout, index=index_new, life_expectancy)], by='GEOID')
-theme_dt <- merge(theme_dt, index_dt[, .(GEOID, dropout, index=index_new, life_expectancy)], by='GEOID')
-
-#drop water codes with weird data from maps
-drop_geocodes <- c('53057990100' #san juan water area with lots of big changes
-                   )
-
-#label the outliers
-#index_dt[, outlier_lab := ifelse(is_outlier(le), name, NA_character_), by=index_new]
-
-#save all data
-out <- list(
-  'index'=index_dt,
-  'ranks'=measure_ranks,
-  'ranks_new'=ranks_new,
-  'ranks_old'=ranks_old,
-  'measures'=measure_raw,
-  'themes'=theme_dt,
-  'tracts'=tract_sf,
-  'water'=water_sf
-)
-saveRDS(out, file=file.path(out.dir, 'all_data.RDS'))
-
-#save a lite version of the data for the online mapping tool
-out <- list(
-  'index'=index_dt[, -c('lower', 'upper', 'le_state_average'), with=F],
-  'measures'=measure_dt,
-  'themes'=theme_dt,
-  'tracts'=tract_sf,
-  'water'=water_sf,
-  'roads'=road_sf,
-  'places'=places_sf
-)
-saveRDS(out, file=file.path(out.dir, 'viz_data.RDS'))
-#***********************************************************************************************************************
-
-# ---MAP----------------------------------------------------------------------------------------------------------------
-
-#plot dropouts
+#function to create custom maps 
 cartographeR <- function(shapefile=tract_sf, dt,
                          map_varname, map_label=NA, map_title=NA,
                          subset_var=NA, subset_val=F,
@@ -421,18 +237,18 @@ cartographeR <- function(shapefile=tract_sf, dt,
     message(subset_name)
     
   }
-
+  
   #make variable to plot
   if(scale_type!='cont') dt[, map_var := get(map_varname) %>% as.factor]
   else dt[, map_var := get(map_varname)]
   
   #cleanup geocodes if needed
   if(filter_geocodes %>% is.character) dt <- dt[!(GEOID %in% filter_geocodes)]
-
+  
   #merge dropouts to shapefile and plot
   shp <- shapefile %>% 
     merge(dt, by='GEOID', allow.cartesian=T) 
-
+  
   #make plot
   plot <- ggplot() + 
     geom_sf(data = shp, aes(fill = map_var), lwd=0) + 
@@ -458,7 +274,7 @@ cartographeR <- function(shapefile=tract_sf, dt,
   else if(subset_var %>% is.character  & map_title %>% is.na) plot <- plot + ggtitle(subset_name %>% to_upper_camel_case)
   else if(subset_var %>% is.character & map_title %>% is.character) plot <- plot + 
     ggtitle(paste0(map_title, ': \n', subset_name %>% to_upper_camel_case))
-    
+  
   #save the plot
   file.path(viz.dir, paste0(map_varname, '_',
                             ifelse(subset_var %>% is.character,
@@ -468,11 +284,175 @@ cartographeR <- function(shapefile=tract_sf, dt,
                                    paste0('_by_', facet_var),
                                    ''),
                             '_map.png')
-            ) %>% ggsave(height=8, width=12)
-   
+  ) %>% ggsave(height=8, width=12)
+  
 }
 
+#helper function to copy things out of R
+writeExcel <- function(x,row.names=FALSE,col.names=TRUE,...) {
+  write.table(x,"clipboard",sep="\t",row.names=row.names,col.names=col.names,...)
+}
 
+#label outliers statistically
+isOutlier <- function(x) {
+  return(x < quantile(x, 0.25, na.rm=T) - 1.5 * IQR(x, na.rm=T) | x > quantile(x, 0.75, na.rm=T) + 1.5 * IQR(x, na.rm=T))
+}
+
+#***********************************************************************************************************************
+
+# ---PREP DATA----------------------------------------------------------------------------------------------------------
+##read in and prep datasets for analysis##
+#names of themes have changed, make a map
+item_map <- file.path(data.dir, 'ehd_map_theme_names.csv') %>% fread
+
+#life expectancy data
+le_dt <-  file.path(data.dir, 'le_at_birth_2015_2019.csv') %>% fread
+setnames(le_dt, names(le_dt), 
+         c('county', 'geocode', 'le', 'lower', 'upper'))
+le_dt[, c('le', 'lower', 'upper') := lapply(.SD, as.numeric), .SDcols=c('le', 'lower', 'upper')]
+
+#also bring in the census tracts shapefile in order to do some cartography
+#can be downloaded from the census website using tigris
+tract_sf <- tracts('WA', cb=T) #%>% 
+  #st_transform(32148) #%>% 
+  #erase_water(area_threshold = 0.9) #intersect with water overlay and remove
+
+# tract_sf <- file.path(local.dir, 'shapefile', 'tl_2010_53_tract10.shp') %>% 
+#   st_read
+
+#use the water shapefile as an overlay
+counties_list <- counties('WA', cb=T)
+water_sf <- area_water('WA', counties_list$COUNTYFP %>% unique) %>% 
+  st_simplify(preserveTopology = TRUE, dTolerance = 100)
+
+#also overlay roads
+road_sf <- primary_secondary_roads(state='WA') %>% 
+  st_simplify(preserveTopology = TRUE, dTolerance = 100)
+
+#also overlay places
+places_sf <- places(state = 'WA', cb = T) 
+
+#first read in and calculate all the ranks using custom function
+ranks_old <- cleanAndRank(dir=data.dir, path=data_extract_EHDv1, clean_names=item_map, debug=F)
+ranks_new <- cleanAndRank(dir=data.dir, path=data_extract_EHDv2)
+
+##create comparisons##
+#merge measures (old v. new) to compare
+measure_ranks <- merge(ranks_old$measure[, .(GEOID, item, theme, level,
+                                          rank_v1=measure_rank_integer)],
+                    ranks_new$measure[, .(GEOID, item, theme, level,
+                                          rank=measure_rank_integer),],
+                    by=c('GEOID', 'item', 'theme', 'level'), all = T) %>% 
+  .[, rank_shift := rank-rank_v1] %>% 
+  .[, rank_shift_capped := rank_shift] %>% 
+  .[rank_shift>=5, rank_shift_capped := 5] %>% #cap shift to max for plotting
+  .[rank_shift<=-5, rank_shift_capped := -5]  %>% 
+  .[, rank_shift := rank_shift_capped] %>% 
+  .[, rank_shift_capped := NULL]
+  
+
+#merge raw measures (old v. new) to compare
+measure_raw <- merge(ranks_old$measure_raw[, .(GEOID, item, theme, level,
+                                             measure_v1=measure_rank_val)],
+                       ranks_new$measure[, .(GEOID, item, theme, level,
+                                             measure=measure_rank_val)],
+                       by=c('GEOID', 'item', 'theme', 'level'), all=T) %>% 
+  .[, measure_shift := measure-measure_v1]
+  
+#merge both measures datasets
+measure_dt <- merge(measure_ranks,
+                    measure_raw[, .(GEOID, item, measure, measure_v1, measure_shift)],
+                    by=c('GEOID', 'item'))
+
+#merge themes
+theme_dt <- merge(ranks_old$theme[, .(GEOID, item, theme, level,
+                                      rank_v1=theme_rank_integer)],
+                  ranks_new$theme[, .(GEOID, item, theme, level,
+                                      rank=theme_rank_integer)],
+                  by=c('GEOID', 'item', 'theme', 'level')) %>% 
+  .[, rank_shift := rank-rank_v1] %>% 
+  .[, rank_shift_capped := rank_shift] %>% 
+  .[rank_shift>=5, rank_shift_capped := 5] %>% #cap shift to max for plotting
+  .[rank_shift<=-5, rank_shift_capped := -5]  %>% 
+  .[, rank_shift := rank_shift_capped] %>% 
+  .[, rank_shift_capped := NULL]
+
+#merge indexes (old v. new) to compare
+index_dt <- merge(ranks_old$index[, .(GEOID, item, theme, level,
+                                      rank_v1=index_rank_integer)],
+                    ranks_new$index[, .(GEOID, item, theme, level, 
+                                        rank=index_rank_integer)],
+                    by=c('GEOID', 'item', 'theme', 'level')) %>% 
+  .[, rank_shift := rank-rank_v1] %>% 
+  .[, rank_shift_capped := rank_shift] %>% 
+  .[rank_shift>=5, rank_shift_capped := 5] %>% #cap shift to max for plotting
+  .[rank_shift<=-5, rank_shift_capped := -5]  %>% 
+  .[, rank_shift := rank_shift_capped] %>% 
+  .[, rank_shift_capped := NULL]
+
+##post estimations##
+#identify dropout units based on impacted threshold of >8
+threshold_val <- 9
+index_dt[, impacted := 0]
+index_dt[, impacted_v1 := 0]
+index_dt[rank>=threshold_val, impacted := 1]
+index_dt[rank_v1>=threshold_val, impacted_v1 := 1]
+index_dt[, dropout := as.factor(impacted_v1 - impacted)]
+
+#add life expectancy data
+index_dt <- merge(index_dt, le_dt, by.x='GEOID', by.y='geocode')
+index_dt[, le_state_average := mean(le, na.rm=T)]
+index_dt[, life_expectancy := paste0(le, ' years (', lower, '-', upper, ')')]
+
+#merge the dropouts back onto the other tables for graphing
+measure_dt <- merge(measure_dt, index_dt[, .(GEOID, dropout, index=rank, 
+                                             impacted, impacted_v1, life_expectancy)], by='GEOID')
+theme_dt <- merge(theme_dt, index_dt[, .(GEOID, dropout, index=rank, 
+                                         impacted, impacted_v1, life_expectancy)], by='GEOID')
+
+#drop water codes with weird data from maps
+drop_geocodes <- c('53057990100' #san juan water area with lots of big changes
+                   )
+
+#label the outliers
+#index_dt[, outlier_lab := ifelse(isOutlier(le), name, NA_character_), by=index_new]
+
+##output##
+#save all data
+out <- list(
+  'index'=index_dt,
+  'ranks'=measure_ranks,
+  'ranks_new'=ranks_new,
+  'ranks_old'=ranks_old,
+  'measures'=measure_raw,
+  'themes'=theme_dt,
+  'tracts'=tract_sf,
+  'water'=water_sf
+)
+saveRDS(out, file=file.path(out.dir, 'all_data.RDS'))
+
+#reformat the data long to simplify for the mapping tool
+#TODO - eventually i think it makes sense to adapt all future code to use this long version
+dt <- list(index_dt[, -c('le', 'lower', 'upper', 'county'), with=F],
+           theme_dt,
+           measure_dt) %>% 
+  rbindlist(use.names=T, fill=T)
+
+#save a lite version of the data for the online mapping tool
+out <- list(
+  'data'=dt,
+  'tracts'=tract_sf,
+  'water'=water_sf,
+  'roads'=road_sf,
+  'places'=places_sf
+)
+saveRDS(out, file=file.path(out.dir, 'viz_data.RDS'))
+
+#also save a csv of the lite data for edmund
+write.csv(dt, file=file.path(out.dir, 'lite_data.csv'))
+#***********************************************************************************************************************
+
+# ---MAP----------------------------------------------------------------------------------------------------------------
 #create a manual diverging color scale to make sure that the index shifts are uniformly depicted
 div_colors <- RColorBrewer::brewer.pal(11, 'RdBu') %>% rev
 names(div_colors) <- unique(measure_ranks$measure_shift_capped) %>% sort
@@ -563,18 +543,18 @@ names(cont_colors) <- 1:10
          dt=measure_ranks, map_varname = 'measure_shift_capped', map_label= 'Index Change',
          map_title = 'Shift in Measure Ranking from V1 to V2',
          subset_var='item', scale_type='div_man', scale_vals = div_colors)
-
-###explore changes
+#***********************************************************************************************************************
+ 
+# ---PLOT--------------------------------------------------------------------------------------------------------------
+##other plots for the technical report and exploring some of the changes##
 #reshape wide in order to run cor
 corr_dt <- measure_ranks[, .(GEOID, item=paste0(theme, ': ', item), measure_new)] %>% 
   dcast(geocode~item, value.var=c('measure_new')) %>% 
   na.omit %>% 
   .[, -c('GEOID'), with=F] #drop the the geocode variable from this figure
   
-
 #generate correlations
 corr_dt <- corr_dt %>% cor
-
 p_mat <- corr_dt %>% cor_pmat
 
 ggcorrplot(corr_dt, type = "upper",
@@ -634,7 +614,8 @@ file.path(viz.dir, 'measure_shift_scatters.png') %>% ggsave(height=8, width=12)
 #***********************************************************************************************************************
 
 # ---ANALYZE------------------------------------------------------------------------------------------------------------
-####regression analysis####
+##variable importance investigation##
+#regression analysis#
 #use logistic regression to find most influential vars
 reg_dt <- index_dt[, .(GEOID, impacted_new, impacted_old, index_new, index_shift, dropout)] %>% 
   merge(measure_ranks[, .(GEOID, item, theme, measure_new, measure_old, measure_shift)], by='GEOID') %>% 
@@ -692,91 +673,101 @@ file.path(viz.dir, 'measure_shift_scatters.png') %>% ggsave(height=8, width=12)
 
 # ---SCRAP -------------------------------------------------------------------------------------------------------------
 ##explore problems with wastewater data
-cartographeR(dt=ranks_old$measure_raw, map_varname = 'rank_order', scale_type='cont',
-             subset_var='item', subset_val='Wastewater Discharge')
+# cartographeR(dt=ranks_old$measure_raw, map_varname = 'rank_order', scale_type='cont',
+#              subset_var='item', subset_val='Wastewater Discharge')
+# 
+# cartographeR(dt=ranks_new$measure_raw, map_varname = 'rank_order', scale_type='cont',
+#              subset_var='item', subset_val='Wastewater Discharge')
+# 
+# 
+# #more complicated version of the violin plot (with labeled outliers)
+# ggplot(index_dt, aes(index_new %>% as.factor, le)) + 
+#   geom_violin(aes(col = index_new %>% as.factor, fill = index_new %>% as.factor), alpha = 0.25)+
+#   labs(x = "Index", y = "Life Expectancy (Years; 2015-2019)",
+#        # title = "Temperature rise in India",
+#        # subtitle = "Monthly temperature fluctuations between 1961-2019",
+#        # caption = "Data source: Kaggle.com"
+#   ) +
+#   geom_vline(xintercept = 2.5, linetype='dashed', color='dark red') +
+#   scale_x_discrete() +
+#   scale_color_brewer('Index', palette='PuOr', direction=-1) +
+#   scale_fill_brewer('Index', palette='PuOr', direction=-1) +
+#   geom_boxplot(color = "gray20", width = 0.15, coef = 1.5) +
+#   geom_text_repel(aes(label = outlier_lab), na.rm = TRUE, show.legend = F) +
+#   annotate("text", x = 2.1, y = 95, label = "Highly Impacted", vjust = -0.5, color='dark red') +
+#   theme_minimal() +
+#   theme(legend.position = c(1, 1), legend.justification = c(0, 0),
+#         #legend.text=element_text(size=10),
+#         plot.title = element_text(hjust=0.5), plot.margin=unit(c(0, 0, 0, 0), "in"))
+# 
+# #save the plot
+# file.path(viz.dir, 'le_violin.png') %>% ggsave(height=8, width=12)
+# 
+# 
+# ggplot(index_dt, aes(x = index_new %>% as.factor, y = le)) + 
+#   ggdist::stat_halfeye(
+#     adjust = .5, 
+#     width = .6, 
+#     .width = 0, 
+#     justification = -.3, 
+#     point_colour = NA) + 
+#   geom_boxplot(
+#     width = .25, 
+#     outlier.shape = NA
+#   ) +
+#   geom_point(
+#     size = 1.3,
+#     alpha = .3,
+#     position = position_jitter(
+#       seed = 1, width = .1
+#     )
+#   ) + 
+#   coord_cartesian(clip = "off") +
+#   scale_x_discrete('Index') +
+#   scale_y_continuous('Life Expectancy (Years; 2015-2019)') +
+#   theme_minimal()
+# 
+# #save the plot
+# file.path(viz.dir, 'le_distribution.png') %>% ggsave(height=8, width=12)
+# 
+# # Bin size control + color palette
+# ggplot(measure_ranks, aes(x=item, fill=avg_shift) ) +
+#   geom_bar(aes(y=measure_shift), stat = "summary", fun = "mean") +
+#   #geom_hex(bins = 70) +
+#   scale_fill_continuous(type = "viridis") +
+#   scale_y_continuous(trans = pseudolog10_trans) +
+#   theme_bw() +
+#   theme(axis.text.x=element_text(angle=20,hjust=1))
+# 
+# # Bin size control + color palette
+# ggplot(index_dt, aes(x=GEOID, index_shift, color=index_shift) ) +
+#   geom_point(position='jitter') +
+#   #geom_hex(bins = 70) +
+#   scale_color_continuous(type = "viridis") +
+#   theme_bw() 
+# 
+# # Bin size control + color palette
+# ggplot(measure_raw[item=='Lead Risk From Housing'], aes(x=measure_old, measure_new, color=measure_shift) ) +
+#   geom_point(position='jitter') +
+#   #geom_hex(bins = 70) +
+#   scale_color_continuous(type = "viridis") +
+#   theme_bw() 
+# 
+# ggplot(measure_raw[item=='PM 2.5 -Diesel Emissions (Annual Tons/Km2)'], aes(x=measure_old, measure_new, color=measure_shift) ) +
+#   geom_point(position='jitter') +
+#   #geom_hex(bins = 70) +
+#   scale_color_continuous(type = "viridis") +
+#   theme_bw() 
 
-cartographeR(dt=ranks_new$measure_raw, map_varname = 'rank_order', scale_type='cont',
-             subset_var='item', subset_val='Wastewater Discharge')
-
-
-#more complicated version of the violin plot (with labeled outliers)
-ggplot(index_dt, aes(index_new %>% as.factor, le)) + 
-  geom_violin(aes(col = index_new %>% as.factor, fill = index_new %>% as.factor), alpha = 0.25)+
-  labs(x = "Index", y = "Life Expectancy (Years; 2015-2019)",
-       # title = "Temperature rise in India",
-       # subtitle = "Monthly temperature fluctuations between 1961-2019",
-       # caption = "Data source: Kaggle.com"
-  ) +
-  geom_vline(xintercept = 2.5, linetype='dashed', color='dark red') +
-  scale_x_discrete() +
-  scale_color_brewer('Index', palette='PuOr', direction=-1) +
-  scale_fill_brewer('Index', palette='PuOr', direction=-1) +
-  geom_boxplot(color = "gray20", width = 0.15, coef = 1.5) +
-  geom_text_repel(aes(label = outlier_lab), na.rm = TRUE, show.legend = F) +
-  annotate("text", x = 2.1, y = 95, label = "Highly Impacted", vjust = -0.5, color='dark red') +
-  theme_minimal() +
-  theme(legend.position = c(1, 1), legend.justification = c(0, 0),
-        #legend.text=element_text(size=10),
-        plot.title = element_text(hjust=0.5), plot.margin=unit(c(0, 0, 0, 0), "in"))
-
-#save the plot
-file.path(viz.dir, 'le_violin.png') %>% ggsave(height=8, width=12)
-
-
-ggplot(index_dt, aes(x = index_new %>% as.factor, y = le)) + 
-  ggdist::stat_halfeye(
-    adjust = .5, 
-    width = .6, 
-    .width = 0, 
-    justification = -.3, 
-    point_colour = NA) + 
-  geom_boxplot(
-    width = .25, 
-    outlier.shape = NA
-  ) +
-  geom_point(
-    size = 1.3,
-    alpha = .3,
-    position = position_jitter(
-      seed = 1, width = .1
-    )
-  ) + 
-  coord_cartesian(clip = "off") +
-  scale_x_discrete('Index') +
-  scale_y_continuous('Life Expectancy (Years; 2015-2019)') +
-  theme_minimal()
-
-#save the plot
-file.path(viz.dir, 'le_distribution.png') %>% ggsave(height=8, width=12)
-
-# Bin size control + color palette
-ggplot(measure_ranks, aes(x=item, fill=avg_shift) ) +
-  geom_bar(aes(y=measure_shift), stat = "summary", fun = "mean") +
-  #geom_hex(bins = 70) +
-  scale_fill_continuous(type = "viridis") +
-  scale_y_continuous(trans = pseudolog10_trans) +
-  theme_bw() +
-  theme(axis.text.x=element_text(angle=20,hjust=1))
-
-# Bin size control + color palette
-ggplot(index_dt, aes(x=GEOID, index_shift, color=index_shift) ) +
-  geom_point(position='jitter') +
-  #geom_hex(bins = 70) +
-  scale_color_continuous(type = "viridis") +
-  theme_bw() 
-
-# Bin size control + color palette
-ggplot(measure_raw[item=='Lead Risk From Housing'], aes(x=measure_old, measure_new, color=measure_shift) ) +
-  geom_point(position='jitter') +
-  #geom_hex(bins = 70) +
-  scale_color_continuous(type = "viridis") +
-  theme_bw() 
-
-ggplot(measure_raw[item=='PM 2.5 -Diesel Emissions (Annual Tons/Km2)'], aes(x=measure_old, measure_new, color=measure_shift) ) +
-  geom_point(position='jitter') +
-  #geom_hex(bins = 70) +
-  scale_color_continuous(type = "viridis") +
-  theme_bw() 
+#--------------------------------------------------------
+# Purpose: re-create IBL ranks & QA observed vs expected ranks
+# Author: Christopher Ahmed (christopher.ahmed@doh.wa.gov)
+# Date: January 2022
+#
+# Note: this script reads in a data extract created from the backend
+#   of WTN. The extract includes all the data IBL uses to create its ranks
+#   the extract is a long data-set as opposed to wide.
+#--------------------------------------------------------
 
 # Clean Data Extract Data
 # Apply Weights If Not = 1

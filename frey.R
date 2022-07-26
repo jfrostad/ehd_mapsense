@@ -2,7 +2,7 @@
 # Author: JF
 # Date: 04/08/2022
 # Purpose: Prepare EHD rankings from raw data, explore and analyze sensitivity
-# source("/homes/jfrostad/_code/lbd/hap/cooking/rover/opportunity.R", echo=T)
+# source("/homes/jfrostad/_code/ehd_mapsense/frey.R", echo=T)
 #***********************************************************************************************************************
 
 # ----CONFIG------------------------------------------------------------------------------------------------------------
@@ -47,247 +47,15 @@ data_extract_EHDv2 <- 'ehd_data_v3.xlsx' #TODO rename
 ###Output###
 out.dir <- file.path(my_repo, 'output')
 viz.dir  <- file.path(my_repo, 'viz')
+vizdata.dir  <- file.path(my_repo, '_code/baldR/data')
 #***********************************************************************************************************************
 
 # ---FUNCTIONS----------------------------------------------------------------------------------------------------------
-#library of functions specific to this script
-#TODO eventually port out to library
-cleanAndRank <- function(dir, path,
-                         nranks=10, 
-                         clean_names=F,
-                         debug=F) {
-  
-  if(debug) browser()
-  
-  # File Details:
-  # Weights: Measures: All 1's = No Special Weights
-  #          Themes: "Environmental Effects" = .5, Other Themes Are 1's = No Special Weights
-  # Rank Method: Themes: Average
-  #              Index: (("Environmental Effects"+"Environmental Exposures")/2)*
-  #                     (("Socioeconomic Factors"+"Sensitive Populations")/2)
-  # Read Data Extract (3-Sheets)
-  message('reading')
-  extract_measure <- read_xlsx(file.path(dir,path), sheet = "Measure",
-                               col_types=c('numeric', 'numeric', 'numeric',
-                                           'guess', 'guess', 'guess',
-                                           'guess', 'guess', 'guess', 
-                                           'guess')) %>% as.data.table
-  
-  extract_theme <- read_xlsx(file.path(dir,path), sheet = "Theme",
-                             col_types=c('numeric', 'numeric', 'numeric',
-                                         'guess', 'guess', 'numeric',
-                                         'guess', 'guess')) %>% as.data.table
-  
-  extract_index <- read_xlsx(file.path(dir,path), sheet = "Index",
-                             col_types=c('numeric', 'numeric', 'numeric',
-                                         'guess', 'guess', 'guess',
-                                         'guess', 'guess')) %>% as.data.table
-  
-  # Clean Data Extract Data
-  # Apply Weights If Not = 1
-  message('cleaning')
-  measure_dt <- extract_measure %>% 
-    setnames(., names(.), names(.) %>% tolower) %>% 
-    .[rank==-1, rank := NA] %>% 
-    .[rankcalculatedvalue==-1, rankcalculatedvalue := NA] %>% 
-    .[, .(GEOID=as.character(geocode), item=itemname, theme=themename, measure_rank=rank, 
-          measure_rank_val=rankcalculatedvalue,
-          level=3)] #lowest level of aggregation
-  
-  index_dt <- extract_index %>% 
-    setnames(., names(.), names(.) %>% tolower) %>% 
-    .[, .(GEOID=as.character(geocode), index_rank=rank, index_rank_val=rankcalculatedvalue)]
-  
-  theme_dt <- extract_theme %>% 
-    setnames(., names(.), names(.) %>% tolower) %>% 
-    .[, theme_weights := 1] %>% 
-    .[themename=="Environmental Effects", theme_weights := .5] %>% 
-    .[, .(GEOID=as.character(geocode), theme=themename, theme_weights,
-          theme_rank_val=rankcalculatedvalue, theme_rank=rank)] %>% 
-    merge(index_dt, by='GEOID') #merge on index information
-  
-  # Remap item names
-  if(clean_names %>% is.data.table) {
-    
-    measure_dt <- setnames(measure_dt, 'item', 'item_old') %>% 
-      merge(item_map, by='item_old')
-    
-  }
-  
-  # Calculate Ranks: Data Measures
-  message('calculating measure ranks')
-  measure_ranks <- measure_dt[, item := factor(item)] %>% 
-    .[, rank_order := frank(measure_rank_val, 
-                            na.last='keep', 
-                            ties.method = 'min'), by=item] %>% 
-    .[, bin_size := floor(sum(!is.na(measure_rank_val))/nranks), by=item] %>% 
-    #bin the ranks and number them by rounding up
-    .[, measure_rank_integer := (rank_order / bin_size) %>% ceiling, by=item] %>% 
-    # Non-Missing Tract's WIth NA's Are Given A Measure Rank = -1
-    .[measure_rank_integer>nranks, measure_rank_integer := nranks] %>% 
-    setnafill(type='const', fill=-1, cols=c('measure_rank_val',
-                                            'measure_rank_integer',
-                                            'measure_rank')) %>% 
-    .[, qa_measures := measure_rank == measure_rank_integer] #verify that calcs match published
-  
-  
-  # Calculate Ranks: Themes
-  #crossjoin to create all combos of geocode and theme+name
-  #thene fill with 0s
-  message('calculating theme ranks')
-  theme_ranks <- measure_dt[, CJ(GEOID, item, unique=T), by=theme] %>% 
-    merge(measure_dt, by=c('GEOID', 'item', 'theme'), all.x=T) %>% 
-    merge(theme_dt, by=c('GEOID', 'theme')) %>% 
-    # Missing Tracts Are Added To Measures With A Measure Rank = 0
-    setnafill(., type='const', fill=0, cols=names(.) %>% .[.%like%'rank']) %>% 
-    .[, measure_num := .N, by=.(GEOID, theme)] %>% 
-    .[, measure_rank_sum := sum(measure_rank_integer), by=.(GEOID, theme)] %>% 
-    .[, measure_rank_sum := sum(measure_rank_integer), by=.(GEOID, theme)] %>% 
-    unique(., by=c('GEOID', 'theme')) %>% 
-    .[, item := 'Aggregated'] %>%  #item no longer relevant after collapse
-    .[, level := 2] %>%  #second level of aggregation
-    #TODO ranking could be better as a function??
-    .[, theme_avg_rank := round_half_up(measure_rank_sum/measure_num, 2), by=theme] %>% 
-    .[, theme_rank_order := frank(theme_avg_rank, 
-                                  na.last='keep', 
-                                  ties.method = 'min'), by=theme] %>% 
-    .[, theme_bin_size := floor(sum(!is.na(theme_avg_rank))/nranks), by=theme] %>% 
-    #bin the ranks and number them by rounding up
-    .[, theme_rank_integer := (theme_rank_order / theme_bin_size) %>% ceiling, by=theme] %>% 
-    # Non-Missing Tract's WIth NA's Are Given A Measure Rank = -1
-    .[theme_rank_integer>nranks, theme_rank_integer := nranks] %>% 
-    .[, qa_themes := theme_rank == theme_rank_integer] #verify that calcs match published
-  
-  
-  # Calculate Ranks: Index
-  # File Details Above Indicates Theme "Environmental Effects" is Weighted At 0.5 And
-  # The Rank Method = (("Environmental Effects"+"Environmental Exposures")/2)*
-  #                     (("Socioeconomic Factors"+"Sensitive Populations")/2)
-  # The First Sum In This Method = The Pollution Burden, The Second = Population Characteristics
-  # The Theme Field We Start With = calc_theme_avg_measure_ranks
-  message('calculating index ranks')
-  index_ranks <- setorder(theme_ranks, GEOID, theme) %>% 
-    .[, weighted_ranks := theme_avg_rank * theme_weights] %>% 
-    .[theme%like%'Environmental', burden_sum := sum(weighted_ranks), by=GEOID] %>% 
-    setnafill(type='locf', cols='burden_sum') %>%  #env ordered first, so carry fwd
-    .[theme%like%'Environmental', burden_avg := mean(weighted_ranks), by=GEOID] %>% 
-    setnafill(type='locf', cols='burden_avg') %>%  #env ordered first, so carry fwd
-    .[!(theme%like%'Environmental'), pop_chars := sum(weighted_ranks), by=GEOID] %>% 
-    setnafill(type='nocb', cols='pop_chars') %>%  #env ordered first, so carry back
-    .[!(theme%like%'Environmental'), pop_avg := mean(weighted_ranks), by=GEOID] %>% 
-    setnafill(type='nocb', cols='pop_avg') %>%  #env ordered first, so carry back
-    unique(., by=c('GEOID')) %>% 
-    .[, item := 'Aggregated'] %>%  #theme and item no longer relevant after collapse
-    .[, theme := 'Aggregated'] %>%  #theme and item no longer relevant after collapse
-    .[, level := 1] %>%  #highest level of aggregation
-    #scale both per cal enviroscreen standard
-    .[, burden_scaled := burden_avg / max(burden_avg) * 10] %>% 
-    .[, pop_scaled := pop_avg / max(pop_avg) * 10] %>% 
-    #TODO ranking could be better as a function??
-    .[, index_avg_rank := round_half_up(burden_sum/2*pop_chars/2, 
-                                        2)] %>% 
-    .[, index_rank_cal := burden_avg * pop_avg] %>% 
-    #.[order(index_avg_rank), index_rank_int := floor( 1 + nranks * (.I-1)/.N)] %>% 
-    .[, index_rank_order := frank(index_avg_rank, 
-                                  na.last='keep', 
-                                  ties.method = 'min')] %>% 
-    .[, index_bin_size := floor(sum(!is.na(index_avg_rank))/nranks)] %>% 
-    #bin the ranks and number them by rounding up
-    .[, index_rank_integer := (index_rank_order / index_bin_size) %>% ceiling] %>% 
-    .[index_rank_integer>nranks, index_rank_integer := nranks] %>% 
-    #redo everything with the scaled cal method
-    .[, index_rank_order := frank(index_rank_cal, 
-                                  na.last='keep', 
-                                  ties.method = 'min')] %>% 
-    .[, index_bin_size := floor(sum(!is.na(index_rank_cal))/nranks)] %>% 
-    #bin the ranks and number them by rounding up
-    .[, index_rank_integer_cal := (index_rank_order / index_bin_size) %>% ceiling] %>% 
-    # Non-Missing Tract's WIth NA's Are Given A Measure Rank = -1
-    .[index_rank_integer>nranks, index_rank_integer := nranks] %>% 
-    .[index_rank_integer_cal>nranks, index_rank_integer_cal := nranks] %>% 
-    .[, qa_index := index_rank == index_rank_integer] #verify that calcs match published
-  
-  list('measure'=measure_ranks,
-       'theme'=theme_ranks,
-       'index'=index_ranks,
-       'measure_raw'=measure_dt) %>% 
-    return
-  
-}
+#source custom functions that are relevant to this module
+file.path(code.dir, '_lib', 'prep_fx.R') %>% source
+file.path(code.dir, '_lib', 'viz_fx.R') %>% source
 
-#function to create custom maps 
-cartographeR <- function(shapefile=tract_sf, dt,
-                         map_varname, map_label=NA, map_title=NA,
-                         subset_var=NA, subset_val=F,
-                         facet_var=F,
-                         filter_geocodes=drop_geocodes,
-                         scale_type='cont',
-                         scale_vals=NULL) {
-  
-  #if necessary, subset data
-  if(subset_var %>% is.character) {
-    dt <- dt[get(subset_var)==subset_val]
-    
-    #also cleanup the name for file
-    subset_name <- str_replace_all(subset_val, ' ', "000") %>% 
-      tolower %>% 
-      str_replace_all("[^[:alnum:]]", "") %>% 
-      str_replace_all('000', "_")
-    
-    message(subset_name)
-    
-  }
-  
-  #make variable to plot
-  if(scale_type!='cont') dt[, map_var := get(map_varname) %>% as.factor]
-  else dt[, map_var := get(map_varname)]
-  
-  #cleanup geocodes if needed
-  if(filter_geocodes %>% is.character) dt <- dt[!(GEOID %in% filter_geocodes)]
-  
-  #merge dropouts to shapefile and plot
-  shp <- shapefile %>% 
-    merge(dt, by='GEOID', allow.cartesian=T) 
-  
-  #make plot
-  plot <- ggplot() + 
-    geom_sf(data = shp, aes(fill = map_var), lwd=0) + 
-    geom_sf(data = water_sf, lwd=0, color = 'gray70', fill = 'gray95') +
-    #TODO seems to make the map tilted even though this is the NAD83 proj?
-    #coord_sf(crs=4269) + 
-    theme_void()
-  
-  #facet by theme if needed
-  if(facet_var %>% is.character) plot <- plot + facet_wrap(reformulate(facet_var))
-  
-  #add on the colorscale
-  #TODO could probably just make this reflexive based on input data
-  if(scale_type=='div') plot <- plot + scale_fill_brewer(map_label, palette='RdBu', na.value = "grey75", direction=-1)
-  else if(scale_type=='div_man') plot <- plot + scale_fill_manual(map_label, values=scale_vals, na.value = "grey75")
-  else if(scale_type=='drops') plot <- plot + scale_fill_brewer(map_label, palette='PuOr', na.value = "grey75", direction=-1)
-  else if(scale_type=='bin') plot <- plot + scale_fill_viridis_d(map_label, option = "plasma", na.value = "grey75")
-  else if(scale_type=='cont') plot <- plot + scale_fill_viridis_c(map_label, option='magma', na.value = "grey75")
-  
-  #title 
-  #TODO add more functionality
-  if(map_title %>% is.character & subset_var %>% is.na) plot <- plot + ggtitle(map_title)
-  else if(subset_var %>% is.character  & map_title %>% is.na) plot <- plot + ggtitle(subset_name %>% to_upper_camel_case)
-  else if(subset_var %>% is.character & map_title %>% is.character) plot <- plot + 
-    ggtitle(paste0(map_title, ': \n', subset_name %>% to_upper_camel_case))
-  
-  #save the plot
-  file.path(viz.dir, paste0(map_varname, '_',
-                            ifelse(subset_var %>% is.character,
-                                   subset_name,
-                                   ''),
-                            ifelse(facet_var %>% is.character,
-                                   paste0('_by_', facet_var),
-                                   ''),
-                            '_map.png')
-  ) %>% ggsave(height=8, width=12)
-  
-}
-
+##custom utilities##
 #helper function to copy things out of R
 writeExcel <- function(x,row.names=FALSE,col.names=TRUE,...) {
   write.table(x,"clipboard",sep="\t",row.names=row.names,col.names=col.names,...)
@@ -295,7 +63,7 @@ writeExcel <- function(x,row.names=FALSE,col.names=TRUE,...) {
 
 #label outliers statistically
 isOutlier <- function(x) {
-  return(x < quantile(x, 0.25, na.rm=T) - 1.5 * IQR(x, na.rm=T) | x > quantile(x, 0.75, na.rm=T) + 1.5 * IQR(x, na.rm=T))
+  quantile(x, 0.25, na.rm=T) - 1.5 * IQR(x, na.rm=T) | x > quantile(x, 0.75, na.rm=T) + 1.5 * IQR(x, na.rm=T)
 }
 
 #***********************************************************************************************************************
@@ -438,7 +206,7 @@ dt <- list(index_dt[, -c('le', 'lower', 'upper', 'county'), with=F],
            measure_dt) %>% 
   rbindlist(use.names=T, fill=T)
 
-#save a lite version of the data for the online mapping tool
+#save a  version of the data for the online mapping tool
 out <- list(
   'data'=dt,
   'tracts'=tract_sf,
@@ -446,9 +214,17 @@ out <- list(
   'roads'=road_sf,
   'places'=places_sf
 )
-saveRDS(out, file=file.path(out.dir, 'viz_data.RDS'))
+
+saveRDS(out, file=file.path(vizdata.dir, 'viz_data.RDS'))
 
 #also save a csv of the lite data for edmund
+out <- list(
+  'data'=dt,
+  'tracts'=tract_sf
+)
+
+
+saveRDS(out, file=file.path(out.dir, 'lite_data.RDS'))
 write.csv(dt, file=file.path(out.dir, 'lite_data.csv'))
 #***********************************************************************************************************************
 

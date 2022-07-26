@@ -201,7 +201,7 @@ saveRDS(out, file=file.path(out.dir, 'all_data.RDS'))
 
 #reformat the data long to simplify for the mapping tool
 #TODO - eventually i think it makes sense to adapt all future code to use this long version
-dt <- list(index_dt[, -c('le', 'lower', 'upper', 'county'), with=F],
+dt <- list(index_dt[, -c('le', 'lower', 'upper', 'le_state_average', 'county'), with=F],
            theme_dt,
            measure_dt) %>% 
   rbindlist(use.names=T, fill=T)

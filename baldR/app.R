@@ -1,52 +1,33 @@
 # ----HEADER------------------------------------------------------------------------------------------------------------
 # Author: JF
-# Date: 04/08/2020
-# Purpose: Produce HAP paper results
-# source("/homes/jfrostad/_code/lbd/hap/cooking/rover/opportunity.R", echo=T)
+# Date: 05/31/2022
+# Purpose: A shiny mapping and viztool for the mapping/sensitivity EHD proj
+# source("/homes/jfrostad/_code/ehd_mapsense/baldR/app.R", echo=T)
 #***********************************************************************************************************************
 
 # ----CONFIG------------------------------------------------------------------------------------------------------------
 # clear memory
 rm(list=ls())
 
-# runtime configuration
-if (Sys.info()["sysname"] == "Linux") {
-  j_root <- "/home/j/"
-  h_root <- "/homes/jfrostad/"
-  arg <- commandArgs()[-(1:3)] # First args are for unix use only
-  
-  if (length(arg)==0) {
-    # arg <- c("IND", #current project iteration
-    #          "8", #output version
-    #          1) #number of cores provided to multicore functions
-  }
-  
-} else {
-  j_root <- "J:"
-  h_root <- "H:"
-  # arg <- c("IND", #current project iteration
-  #          "4", #output version
-  #          1) #number of cores provided to multicore functions
-}
-
+#set opts
+options(scipen=999) #readability
 #use cairo to render instead of quartz (quartz causes big slowdowns with geom_sf)
 if(!identical(getOption("bitmapType"), "cairo") && isTRUE(capabilities()[["cairo"]])){
   options(bitmapType = "cairo")
 }
 
-## Set core_repo location and indicator group
-#user            <- Sys.info()['user']
-my_repo         <- 'C:\\Users\\jfrostad\\Desktop\\shiny_app'
-setwd(my_repo)
+## Set core_repo location
+user            <- Sys.info()['user']
+my_repo         <- ifelse(Sys.info()["sysname"] == "Linux",
+                          file.path('/homes', user, ''),
+                          file.path('C:/Users', user, 'Documents/ehd_mapsense'))
 
 ## Load libraries and  MBG project functions.
 library(rsconnect)
 library(ggplot2)
 library(shiny)
 library(magrittr)
-#library(jsonlite)
 library(data.table)
-#library(leaflet)
 library(tmap)
 library(dplyr)
 
@@ -65,6 +46,7 @@ global_sf <- reactiveVal(NULL)
 
 # ----IN/OUT------------------------------------------------------------------------------------------------------------
 ###Input###
+#TODO necessary section for shiny? Everything is pathed relative packaged within the directory of app.R
 #raw data
 # main.dir <- file.path('/mnt/share/scratch/users/jfrostad/ehd_mapping/')
 # data.dir <- file.path(main.dir, 'data')
@@ -151,7 +133,7 @@ places_sf <- dataset$places %>%
   rename(PLACE=NAME)
 water_sf <- dataset$water
 road_sf <- dataset$roads
-dt <- dataset$index 
+dt <- dataset$data 
 
 #merge places onto tracts
 # tract_sf <- st_join(tract_sf,  
@@ -159,13 +141,11 @@ dt <- dataset$index
 #                     join = st_nearest_feature, left=T)
 
 #set values for the input slider
-layer_vars <- setdiff(names(dataset), 
-                      c('tracts', 'water', 
-                        'roads', 'places'))
+layer_vars <- 1:3
 
 #merge dropouts to sf
 data_sf <- tract_sf %>% 
-  merge(dt, by='GEOID', allow.cartesian=T) 
+  merge(dt[level==1], by='GEOID', allow.cartesian=T) 
 
 #create a manual diverging color scale to make sure that the index shifts are uniformly depicted
 div_colors <- RColorBrewer::brewer.pal(11, 'RdBu') %>% rev
@@ -200,7 +180,7 @@ server <- function(input, output, session) {
 
     tm_shape(shp = data_sf) +
       tm_view(set.view = c(waLon, waLat, waZoom)) +
-      tm_polygons(col = "index_new",
+      tm_polygons(col = "rank",
                   palette = cont_colors,
                   labels = names(cont_colors),
                   style='cont',
@@ -221,7 +201,7 @@ server <- function(input, output, session) {
     observeEvent(input$layer, {
 
       #capture change to dataset layer for varSelectInput for variables
-      global_data(dataset[[input$layer]])
+      global_data(dataset$data[level==input$layer])
       
       data_sf <- tract_sf %>% 
         merge(global_data(), by='GEOID', allow.cartesian=T) 
@@ -233,8 +213,7 @@ server <- function(input, output, session) {
       freezeReactiveValue(input, "measure")
       updateSelectInput(session,
                         "measure",
-                        choices = global_data()$item %>% unique %>% sort,
-                        selected = character(0))
+                        choices = global_data()$item %>% unique %>% sort)
     })  
     
     #update varSelectInput options
@@ -242,20 +221,23 @@ server <- function(input, output, session) {
       freezeReactiveValue(input, "var")
       updateVarSelectInput(session, "var", 
                            data = global_data(),
-                           selected = character(0))
+                           selected='rank')
 
     })
 
     #whenever the measure changes (last input) redraw the map
     #TODO or make it so that whenever measure or variable change?? because you could change var within measure
-    observeEvent(input$measure, {
+    toListen <- reactive({
+      list(input$var,input$measure)
+    })
+    observeEvent(toListen(), {
       
     #filter measure/theme if necessary
-    if(input$layer %like% 'ranks|measures') data_sf <- global_sf() %>% dplyr::filter(item==input$measure)
+    data_sf <- global_sf() %>% dplyr::filter(item==input$measure)
 
     #setup scale
-    if (input$var %like% 'new|old') col_pal <- cont_colors
-    else if (input$var %like% 'shift') col_pal <- div_colors
+    col_pal <- cont_colors
+    if (input$var %like% 'shift') col_pal <- div_colors
 
     #update map
     tmapProxy("map", session, {
@@ -287,11 +269,11 @@ ui <- fluidPage(
   titlePanel("EHD Dataset Mapping Tool"),
 
   sidebarPanel(
-    selectInput("layer", "Layer", layer_vars,
-                selected = 'index'),
+    selectInput("layer", "Level", layer_vars,
+                selected = 1),
     varSelectInput("var", "Variable", dt, 
-                   selected = 'index_new'),
-    selectInput("measure", "Measure", NULL) 
+                   selected = 'rank'),
+    selectInput("measure", "Measure", 'Aggregated') 
   # 
   #   # sliderInput('sampleSize', 'Sample Size', min=1, max=nrow(dataset),
   #   #             value=min(1000, nrow(dataset)), step=500, round=0),

@@ -48,7 +48,7 @@ global_sf <- reactiveVal(NULL)
 ###Input###
 #TODO necessary section for shiny? Everything is pathed relative packaged within the directory of app.R
 #raw data
-# main.dir <- file.path('/mnt/share/scratch/users/jfrostad/ehd_mapping/')
+main.dir <- file.path('C:/Users/jfrostad/Documents/ehd_mapsense/_code/baldR')
 # data.dir <- file.path(main.dir, 'data')
 
 # ###Output###

@@ -24,7 +24,7 @@ my_repo         <- ifelse(Sys.info()["sysname"] == "Linux",
 
 #load packages
 #TODO only relevant to running in linux on shared cluster
-package_lib    <- sprintf('%s_code/_lib/pkg_R',h_root)
+package_lib    <- sprintf('%s_code/_lib/pkg_R', my_repo)
 ## Load libraries and  MBG project functions.
 .libPaths(package_lib)
 
@@ -81,12 +81,15 @@ le_dt[, c('le', 'lower', 'upper') := lapply(.SD, as.numeric), .SDcols=c('le', 'l
 
 #also bring in the census tracts shapefile in order to do some cartography
 #can be downloaded from the census website using tigris
+#TODO fix bug in merge from this dataset causing NA tracts
 tract_sf <- tracts('WA', cb=T) #%>% 
   #st_transform(32148) #%>% 
   #erase_water(area_threshold = 0.9) #intersect with water overlay and remove
 
 tract_sf <- file.path(data.dir, 'shapefile', 'tl_2010_53_tract10.shp') %>%
-  st_read
+  st_read %>% 
+  mutate(GEOID=GEOID10)
+  
 
 #use the water shapefile as an overlay
 counties_list <- counties('WA', cb=T)
@@ -379,7 +382,7 @@ ggplot(index_dt, aes(rank %>% as.factor, le)) +
 file.path(viz.dir, 'le_violin_minimal.png') %>% ggsave(height=8, width=12)
 
 #scatter the measure ranks to compare V1:v2
-ggplot(dt[level==3], aes(x=measure_v1, measure, color=dropout) ) +
+ggplot(dt[level==3], aes(x=rank_v1, rank, color=dropout) ) +
   geom_point(position='jitter') +
   #geom_hex(bins = 70) +
   facet_wrap(~item) + 

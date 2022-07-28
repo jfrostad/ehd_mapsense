@@ -8,6 +8,7 @@
 # ----FUNCTIONS---------------------------------------------------------------------------------------------------------
 #function to create custom maps 
 cartographeR <- function(shapefile=tract_sf, dt,
+                         lvl=1, #default is overall rank (2=theme, 3=measure)
                          map_varname, map_label=NA, map_title=NA,
                          subset_var=NA, subset_val=F,
                          facet_var=F,
@@ -15,6 +16,9 @@ cartographeR <- function(shapefile=tract_sf, dt,
                          scale_type='cont',
                          scale_vals=NULL) {
   
+  #filter long dataset to appropriate level
+  dt <- dt[level==lvl]
+
   #if necessary, subset data
   if(subset_var %>% is.character) {
     dt <- dt[get(subset_var)==subset_val]
@@ -30,8 +34,9 @@ cartographeR <- function(shapefile=tract_sf, dt,
   }
   
   #make variable to plot
-  if(scale_type!='cont') dt[, map_var := get(map_varname) %>% as.factor]
-  else dt[, map_var := get(map_varname)]
+  if(scale_type=='cont') dt[, map_var := get(map_varname)] 
+  else dt[, map_var := get(map_varname) %>% as.factor]
+  dt <- dt[!(map_var%in%-1)] #remove the -1s which represent nonmissing NAs (plot as NA)
   
   #cleanup geocodes if needed
   if(filter_geocodes %>% is.character) dt <- dt[!(GEOID %in% filter_geocodes)]
@@ -50,13 +55,14 @@ cartographeR <- function(shapefile=tract_sf, dt,
   
   #facet by theme if needed
   if(facet_var %>% is.character) plot <- plot + facet_wrap(reformulate(facet_var))
-  
+
   #add on the colorscale
   #TODO could probably just make this reflexive based on input data
   if(scale_type=='div') plot <- plot + scale_fill_brewer(map_label, palette='RdBu', na.value = "grey75", direction=-1)
   else if(scale_type=='div_man') plot <- plot + scale_fill_manual(map_label, values=scale_vals, na.value = "grey75")
   else if(scale_type=='drops') plot <- plot + scale_fill_brewer(map_label, palette='PuOr', na.value = "grey75", direction=-1)
   else if(scale_type=='bin') plot <- plot + scale_fill_viridis_d(map_label, option = "plasma", na.value = "grey75")
+  else if(scale_type=='cont_man') plot <- plot + scale_fill_manual(map_label, values=scale_vals, na.value = "grey75")
   else if(scale_type=='cont') plot <- plot + scale_fill_viridis_c(map_label, option='magma', na.value = "grey75")
   
   #title 
@@ -67,6 +73,7 @@ cartographeR <- function(shapefile=tract_sf, dt,
     ggtitle(paste0(map_title, ': \n', subset_name %>% to_upper_camel_case))
   
   #save the plot
+  #TODO make it so you can change the output dir?
   file.path(viz.dir, paste0(map_varname, '_',
                             ifelse(subset_var %>% is.character,
                                    subset_name,

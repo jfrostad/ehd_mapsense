@@ -85,8 +85,8 @@ tract_sf <- tracts('WA', cb=T) #%>%
   #st_transform(32148) #%>% 
   #erase_water(area_threshold = 0.9) #intersect with water overlay and remove
 
-# tract_sf <- file.path(local.dir, 'shapefile', 'tl_2010_53_tract10.shp') %>% 
-#   st_read
+tract_sf <- file.path(data.dir, 'shapefile', 'tl_2010_53_tract10.shp') %>%
+  st_read
 
 #use the water shapefile as an overlay
 counties_list <- counties('WA', cb=T)
@@ -253,64 +253,67 @@ names(cont_colors) <- 1:10
 
 #create a series of colored maps for the different vars in the dataset
   #denote tracts that dropped in or out of high impact
-  cartographeR(dt=index_dt, map_varname = 'dropout', map_label = 'Dropout Direction',
+  cartographeR(dt=dt, map_varname = 'dropout', map_label = 'Dropout Direction',
                map_title = 'Tracts Newly Dropped/Added From High Impact',
                scale_type='drops')
   #show overall change in the index ranking
-  cartographeR(dt=index_dt, map_varname = 'index_shift_capped', map_label = 'Index Change',
-               map_title = 'Shift in Overall Index from V1 to V2',
+  cartographeR(dt=dt, map_varname = 'rank_shift', map_label = 'Rank Change',
+               map_title = 'Shift in Overall Rank from V1.1 to V2.0',
                scale_type='div_man', scale_vals = div_colors)
   #show change in the in the theme specific ranking
-  cartographeR(dt=theme_dt, map_varname = 'index_shift_capped', map_label = 'Index Change',
-               map_title = 'Shift in Overall Index from V1 to V2',
+  cartographeR(dt=dt, map_varname = 'rank_shift', map_label = 'Rank Change',
+               lvl=2, #theme level
+               map_title = 'Shift in Overall Rank from V1.1 to V2.0',
                facet_var='theme', scale_type='div_man', scale_vals = div_colors)
   #show the current version of the overall index
-  cartographeR(dt=index_dt, map_varname = 'index_new', map_label = 'Index',
-               map_title = 'Overall Index (V2)', scale_type='div_man', scale_vals = cont_colors)
+  cartographeR(dt=dt, map_varname = 'rank', map_label = 'Rank',
+               map_title = 'Overall Rank (V2.0)', scale_type='cont_man', scale_vals = cont_colors)
   #show the old version of the overall index
-  cartographeR(dt=index_dt, map_varname = 'index_old', map_label = 'Index', 
-               map_title = 'Overall Index (V1)', scale_type='cont')
+  cartographeR(dt=dt, map_varname = 'rank_v1', map_label = 'Rank',
+               map_title = 'Overall Rank (V1.1)', scale_type='cont_man')
   #show which tracts are highly impacted (current version)
-  cartographeR(dt=index_dt, map_varname = 'impacted_new', map_label = 'Impacted', 
-               map_title = 'Highly Impacted Tracts (V2)', scale_type='bin')
+  cartographeR(dt=dt, map_varname = 'impacted', map_label = 'Impacted',
+               map_title = 'Highly Impacted Tracts (V2.0)', scale_type='bin')
   #show which tracts are highly impacted (old version)
-  cartographeR(dt=index_dt, map_varname = 'impacted_old', map_label = 'Impacted', 
-               map_title = 'Highly Impacted Tracts (V1)', scale_type='bin')
+  cartographeR(dt=dt, map_varname = 'impacted_v1', map_label = 'Impacted',
+               map_title = 'Highly Impacted Tracts (V1.1)', scale_type='bin')
   #see if the scaling method has any impact
-  cartographeR(dt=index_dt, map_varname = 'scaling_effect', map_label = 'Effect of Scaling Method', 
-               map_title = 'Scaling Method Impact on Final Index Ranking', scale_type='cont')
+  # cartographeR(dt=dt, map_varname = 'scaling_effect', map_label = 'Effect of Scaling Method', 
+  #              map_title = 'Scaling Method Impact on Final Ranking', scale_type='cont')
   
   #loop through changes in the measures binned by theme
   lapply(unique(measure_ranks$theme),
          cartographeR,
          shapefile=tract_sf,
-         dt=measure_ranks[!(item%like%'Trans')], map_varname = 'measure_shift_capped', map_label= 'Index Change',
-         map_title = 'Shift in Measure Ranking from V1 to V2',
+         dt=dt[!(item%like%'Trans')], map_varname = 'rank_shift', map_label= 'Rank Change',
+         lvl=3, #most granular level
+         map_title = 'Shift in Measure Ranking from V1.1 to V2.0',
          subset_var='theme',
          facet_var='item', scale_type='div_man', scale_vals = div_colors)
   
-  #loop through changes in the measures
-  lapply(unique(measure_raw$item),
-         cartographeR,
-         shapefile=tract_sf,
-         dt=measure_raw, map_varname = 'measure_shift_raw', 
-         subset_var='item', scale_type='cont')
+  # #loop through changes in the measures
+  # lapply(unique(measure_raw$item),
+  #        cartographeR,
+  #        shapefile=tract_sf,
+  #        dt=measure_raw, map_varname = 'measure_shift_raw', 
+  #        subset_var='item', scale_type='cont')
   
   #loop through the measures themselves (both rank and raw)
   #rank
-  lapply(unique(measure_raw$item),
+  lapply(unique(dt$item),
          cartographeR,
          shapefile=tract_sf,
-         dt=measure_ranks, map_varname = 'measure_new', map_label= 'Tract Ranking',
-         map_title = 'Measure Ranking (V2)', 
-         subset_var='item', scale_type='div_man', scale_vals = cont_colors)
-  #raw
+         dt=dt, map_varname = 'rank', map_label= 'Tract Ranking',
+         lvl=3, #most granular level
+         map_title = 'Measure Ranking (V2.0)', 
+         subset_var='item', scale_type='cont_man', scale_vals = cont_colors)
+    #raw
   lapply(unique(measure_raw$item),
          cartographeR,
          shapefile=tract_sf,
          dt=measure_raw, map_varname = 'measure_new_raw', map_label= 'Raw Measure',
-         map_title = 'Measure Ranking (V2)', 
-         subset_var='item', scale_type='cont')
+         map_title = 'Measure Ranking (V2.0)', 
+         subset_var='item', scale_type='cont_man')
   
   #loop through changes in the measure ranks
   lapply(unique(measure_ranks$item),
@@ -355,17 +358,17 @@ ggplot(index_dt, aes(x=index_new, y=le, color=impacted_new %>% as.factor) ) +
   theme_bw() 
 
 #create plot of life expectancy distributions
-ggplot(index_dt, aes(index_new %>% as.factor, le)) + 
-  geom_violin(aes(col = index_new %>% as.factor, fill = index_new %>% as.factor), alpha = 0.25)+
+ggplot(index_dt, aes(rank %>% as.factor, le)) + 
+  geom_violin(aes(col = rank %>% as.factor, fill = rank %>% as.factor), alpha = 0.25)+
   labs(x = "Index", y = "Life Expectancy",
-       title = "Relationship between EHD Index and Life Expectancy",
+       title = "Relationship between EHD Rank and Life Expectancy",
        subtitle = "Average Life Expectancy Between 2015-2019 (dotted line represents state average of 80.3 years)"
   ) +
   geom_vline(xintercept = 8.5, linetype='dashed', color='dark red') +
   geom_hline(yintercept = index_dt[1, le_state_average], linetype='dotted', color='dark blue') +
   scale_x_discrete() +
-  scale_color_brewer('Index', palette='PuOr', direction=-1) +
-  scale_fill_brewer('Index', palette='PuOr', direction=-1) +
+  scale_color_manual('Rank', values=cont_colors, na.value = "grey75") +
+  scale_fill_manual('Rank', values=cont_colors, na.value = "grey75") +
   geom_boxplot(color = "gray20", width = 0.15, coef = 1.5) +
   annotate("text", x = 9.25, y = 99, label = "Highly Impacted Tracts", vjust = -0.5, color='dark red') +
   theme_minimal() +
@@ -376,12 +379,12 @@ ggplot(index_dt, aes(index_new %>% as.factor, le)) +
 file.path(viz.dir, 'le_violin_minimal.png') %>% ggsave(height=8, width=12)
 
 #scatter the measure ranks to compare V1:v2
-ggplot(measure_ranks, aes(x=measure_old, measure_new, color=dropout) ) +
+ggplot(dt[level==3], aes(x=measure_v1, measure, color=dropout) ) +
   geom_point(position='jitter') +
   #geom_hex(bins = 70) +
   facet_wrap(~item) + 
-  scale_x_continuous("Measure Ranking, V1") +
-  scale_y_continuous("Measure Ranking, V2") +
+  scale_x_continuous("Measure Ranking, V1.1") +
+  scale_y_continuous("Measure Ranking, V2.0") +
   scale_color_brewer('Highly Impacted: \nDropouts', palette='Pastel1') +
   theme_minimal() 
 #save the plot

@@ -150,6 +150,7 @@ data_sf <- tract_sf %>%
 #create a manual diverging color scale to make sure that the index shifts are uniformly depicted
 div_colors <- RColorBrewer::brewer.pal(11, 'RdBu') %>% rev
 names(div_colors) <- unique(dataset$ranks$measure_shift_capped) %>% sort
+bin_colors <- c('#f1a340', '#f7f7f7', '#998ec3') %>% rev
 
 #create a manual discrete color scale for the continuous index and make sure the color scale legend has all integers
 cont_colors <- viridis::magma(n = 10)
@@ -185,7 +186,8 @@ server <- function(input, output, session) {
                   labels = names(cont_colors),
                   style='cont',
                   border.alpha = 0,
-                  popup.vars=c("County"="NAMELSADCO", "Measure"="item",  "Theme"="theme", 
+                  popup.vars=c("Measure"="item",  "Theme"="theme", 
+                               #"County"="NAMELSADCO", 
                                #'Overall Rank'=index,
                                'Life Expectancy'='life_expectancy'),
                   id='name',
@@ -238,6 +240,7 @@ server <- function(input, output, session) {
     #setup scale
     col_pal <- cont_colors
     if (input$var %like% 'shift') col_pal <- div_colors
+    else if (input$var %like% 'dropout') col_pal <- bin_colors
 
     #update map
     tmapProxy("map", session, {
@@ -249,7 +252,8 @@ server <- function(input, output, session) {
                     labels = names(col_pal),
                     style='cont',
                     border.alpha = 0,
-                    popup.vars=c("County"="NAMELSADCO", "Measure"="item",  "Theme"="theme", 'Overall Rank'='index',
+                    popup.vars=c("Measure"="item",  "Theme"="theme", 'Overall Rank'='rank',
+                                 #"County"="NAMELSADCO", 
                                  'Life Expectancy'='life_expectancy'),
                     id='name',
                     zindex=401) 

@@ -88,8 +88,8 @@ tract_sf <- tracts('WA', cb=T) #%>%
 
 tract_sf <- file.path(data.dir, 'shapefile', 'tl_2010_53_tract10.shp') %>%
   st_read %>% 
-  mutate(GEOID=GEOID10)
-  
+  mutate(GEOID=GEOID10) %>% 
+  st_simplify(preserveTopology = TRUE, dTolerance = 10)
 
 #use the water shapefile as an overlay
 counties_list <- counties('WA', cb=T)
@@ -105,11 +105,11 @@ places_sf <- places(state = 'WA', cb = T)
 
 #first read in and calculate all the ranks using custom function
 ranks_old <- rankeR(dir=data.dir, path=data_extract_EHDv1, clean_names=item_map, debug=F)
-ranks_new <- rankeR(dir=data.dir, path=data_extract_EHDv2)
+ranks_new <- rankeR(dir=data.dir, path=data_extract_EHDv2) 
 
 ##create comparisons##
 #merge measures (old v. new) to compare
-measure_ranks <- merge(ranks_old$measure[, .(GEOID, item, theme, level,
+measure_ranks <- merge(ranks_old$measure[, .(GEOID, item, item_short, theme, level,
                                           rank_v1=measure_rank_integer)],
                     ranks_new$measure[, .(GEOID, item, theme, level,
                                           rank=measure_rank_integer),],
@@ -123,7 +123,7 @@ measure_ranks <- merge(ranks_old$measure[, .(GEOID, item, theme, level,
   
 
 #merge raw measures (old v. new) to compare
-measure_raw <- merge(ranks_old$measure_raw[, .(GEOID, item, theme, level,
+measure_raw <- merge(ranks_old$measure_raw[, .(GEOID, item, item_short, theme, level,
                                              measure_v1=measure_rank_val)],
                        ranks_new$measure[, .(GEOID, item, theme, level,
                                              measure=measure_rank_val)],
@@ -136,7 +136,7 @@ measure_dt <- merge(measure_ranks,
                     by=c('GEOID', 'item'))
 
 #merge themes
-theme_dt <- merge(ranks_old$theme[, .(GEOID, item, theme, level,
+theme_dt <- merge(ranks_old$theme[, .(GEOID, item, item_short, theme, level,
                                       rank_v1=theme_rank_integer)],
                   ranks_new$theme[, .(GEOID, item, theme, level,
                                       rank=theme_rank_integer)],
@@ -149,7 +149,7 @@ theme_dt <- merge(ranks_old$theme[, .(GEOID, item, theme, level,
   .[, rank_shift_capped := NULL]
 
 #merge indexes (old v. new) to compare
-index_dt <- merge(ranks_old$index[, .(GEOID, item, theme, level,
+index_dt <- merge(ranks_old$index[, .(GEOID, item, item_short, theme, level,
                                       rank_v1=index_rank_integer)],
                     ranks_new$index[, .(GEOID, item, theme, level, 
                                         rank=index_rank_integer)],
@@ -168,7 +168,11 @@ index_dt[, impacted := 0]
 index_dt[, impacted_v1 := 0]
 index_dt[rank>=threshold_val, impacted := 1]
 index_dt[rank_v1>=threshold_val, impacted_v1 := 1]
-index_dt[, dropout := as.factor(impacted_v1 - impacted)]
+index_dt[, dropout := factor(impacted_v1 - impacted,
+                                levels=c(-1, 0, 1),
+                                labels=c('Addition',
+                                         'Steady',
+                                         'Dropout'))]
 
 #add life expectancy data
 index_dt <- merge(index_dt, le_dt, by.x='GEOID', by.y='geocode')
@@ -208,6 +212,8 @@ dt <- list(index_dt[, -c('le', 'lower', 'upper', 'le_state_average', 'county'), 
            theme_dt,
            measure_dt) %>% 
   rbindlist(use.names=T, fill=T)
+dt[item=='Aggregated', item_short := 'Agg'] #TODO fix earlier
+dt <- dt[!(is.na(item_short))] #rows that didn't have data for v1
 
 #save a  version of the data for the online mapping tool
 out <- list(
@@ -225,8 +231,6 @@ out <- list(
   'data'=dt,
   'tracts'=tract_sf
 )
-
-
 saveRDS(out, file=file.path(out.dir, 'lite_data.RDS'))
 write.csv(dt, file=file.path(out.dir, 'lite_data.csv'))
 #***********************************************************************************************************************
@@ -257,7 +261,7 @@ names(cont_colors) <- 1:10
 #create a series of colored maps for the different vars in the dataset
   #denote tracts that dropped in or out of high impact
   cartographeR(dt=dt, map_varname = 'dropout', map_label = 'Dropout Direction',
-               map_title = 'Tracts Newly Dropped/Added From High Impact',
+               map_title = 'Tracts Newly Dropped/Added From High Impact (top 20% of ranks)',
                scale_type='drops')
   #show overall change in the index ranking
   cartographeR(dt=dt, map_varname = 'rank_shift', map_label = 'Rank Change',
@@ -292,7 +296,7 @@ names(cont_colors) <- 1:10
          lvl=3, #most granular level
          map_title = 'Shift in Measure Ranking from V1.1 to V2.0',
          subset_var='theme',
-         facet_var='item', scale_type='div_man', scale_vals = div_colors)
+         facet_var='item_short', scale_type='div_man', scale_vals = div_colors)
   
   # #loop through changes in the measures
   # lapply(unique(measure_raw$item),
@@ -385,9 +389,9 @@ file.path(viz.dir, 'le_violin_minimal.png') %>% ggsave(height=8, width=12)
 ggplot(dt[level==3], aes(x=rank_v1, rank, color=dropout) ) +
   geom_point(position='jitter') +
   #geom_hex(bins = 70) +
-  facet_wrap(~item) + 
-  scale_x_continuous("Measure Ranking, V1.1") +
-  scale_y_continuous("Measure Ranking, V2.0") +
+  facet_wrap(~item_short) + 
+  scale_x_continuous("Indicator Ranking, V1.1") +
+  scale_y_continuous("Indicator Ranking, V2.0") +
   scale_color_brewer('Highly Impacted: \nDropouts', palette='Pastel1') +
   theme_minimal() 
 #save the plot

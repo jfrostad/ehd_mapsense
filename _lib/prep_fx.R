@@ -66,7 +66,7 @@ rankeR <- function(dir, path,
     
     measure_dt <- setnames(measure_dt, 'item', 'item_old') %>% 
       merge(item_map, by='item_old')
-    
+  
   }
   
   # Calculate Ranks: Data Measures

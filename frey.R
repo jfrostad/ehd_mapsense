@@ -128,7 +128,7 @@ measure_raw <- merge(ranks_old$measure_raw[, .(GEOID, item, item_short, theme, l
                        ranks_new$measure[, .(GEOID, item, theme, level,
                                              measure=measure_rank_val)],
                        by=c('GEOID', 'item', 'theme', 'level'), all=T) %>% 
-  .[, measure_shift := measure-measure_v1]
+  .[, measure_shift := measure/measure_v1]
   
 #merge both measures datasets
 measure_dt <- merge(measure_ranks,
@@ -214,6 +214,10 @@ dt <- list(index_dt[, -c('le', 'lower', 'upper', 'le_state_average', 'county'), 
   rbindlist(use.names=T, fill=T)
 dt[item=='Aggregated', item_short := 'Agg'] #TODO fix earlier
 dt <- dt[!(is.na(item_short))] #rows that didn't have data for v1
+
+#make it possible to use a logged scale on measure, which tends skewed
+dt[, measure_trans := log(measure + 0.001)]
+dt[item %like% '%' & measure>0, measure_trans := car::logit(measure+0.001)]
 
 #save a  version of the data for the online mapping tool
 out <- list(

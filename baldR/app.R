@@ -26,6 +26,7 @@ my_repo         <- ifelse(Sys.info()["sysname"] == "Linux",
 library(rsconnect)
 library(ggplot2)
 library(shiny)
+library(shinyWidgets)
 library(magrittr)
 library(data.table)
 library(tmap)
@@ -153,22 +154,12 @@ names(div_colors) <- unique(dataset$ranks$measure_shift_capped) %>% sort
 bin_colors <- c('#f1a340', '#f7f7f7', '#998ec3') %>% rev
 
 #create a manual discrete color scale for the continuous index and make sure the color scale legend has all integers
-cont_colors <- viridis::magma(n = 10)
-#update colors with allies scale
-# cont_colors <- c(
-#   rgb(248, 250, 251, maxColorValue = 255), # 1:     Red: 248, Green: 250, Blue: 251
-#   rgb(236, 242, 246, maxColorValue = 255), # 2:     Red: 236, Green: 242, Blue: 246
-#   rgb(220, 230, 239, maxColorValue = 255), # 3:     Red: 220, Green: 230, Blue: 239
-#   rgb(203, 218, 233, maxColorValue = 255), # 4:     Red: 203, Green: 218, Blue: 233
-#   rgb(194, 199, 223, maxColorValue = 255), # 5:     Red: 194, Green: 199, Blue: 223
-#   rgb(194, 178, 213, maxColorValue = 255), # 6:     Red: 194, Green: 178, Blue: 213
-#   rgb(192, 157, 203, maxColorValue = 255), # 7:     Red: 192, Green: 157, Blue: 203
-#   rgb(189, 132, 186, maxColorValue = 255), # 8:     Red: 189, Green: 132, Blue: 186
-#   rgb(161, 124, 177, maxColorValue = 255), # 9:     Red: 161, Green: 124, Blue: 177
-#   rgb(163, 124, 162, maxColorValue = 255) # 10:   Red: 163, Green: 124, Blue: 162
-# )
+rank_colors <- viridis::magma(n = 10)
+names(rank_colors) <- 1:10
 
-names(cont_colors) <- 1:10
+#create a manual cont color scale and have no labels
+cont_colors <- viridis::magma(n = 12)
+
 #***********************************************************************************************************************
 
 # ---SERVER----------------------------------------------------------------------------------------------------------
@@ -182,9 +173,10 @@ server <- function(input, output, session) {
     tm_shape(shp = data_sf) +
       tm_view(set.view = c(waLon, waLat, waZoom)) +
       tm_polygons(col = "rank",
-                  palette = cont_colors,
-                  labels = names(cont_colors),
-                  style='cont',
+                  alpha = .9,
+                  palette = rank_colors,
+                  labels = names(rank_colors),
+                  style='cat',
                   border.alpha = 0,
                   popup.vars=c("Measure"="item",  "Theme"="theme", 
                                #"County"="NAMELSADCO", 
@@ -230,17 +222,21 @@ server <- function(input, output, session) {
     #whenever the measure changes (last input) redraw the map
     #TODO or make it so that whenever measure or variable change?? because you could change var within measure
     toListen <- reactive({
-      list(input$var,input$measure)
+      list(input$var,input$measure, input$alpha, input$scale)
     })
+    
     observeEvent(toListen(), {
-      
+
     #filter measure/theme if necessary
     data_sf <- global_sf() %>% dplyr::filter(item==input$measure)
 
     #setup scale
-    col_pal <- cont_colors
-    if (input$var %like% 'shift') col_pal <- div_colors
+    if (input$var %like% 'rank') col_pal <- rank_colors
+    else if (input$var %like% 'shift') col_pal <- div_colors
     else if (input$var %like% 'dropout') col_pal <- bin_colors
+    else col_pal <- NULL
+    if (input$var %like% 'rank|dropout') col_style <- 'cat'
+    else col_style <- 'cont'
 
     #update map
     tmapProxy("map", session, {
@@ -248,9 +244,10 @@ server <- function(input, output, session) {
       tm_remove_layer(401) +
         tm_shape(shp = data_sf) +
         tm_polygons(col = input$var %>% as.character, 
+                    alpha = input$alpha %>% as.numeric,
                     palette = col_pal,
                     labels = names(col_pal),
-                    style='cont',
+                    style=col_style,
                     border.alpha = 0,
                     popup.vars=c("Measure"="item",  "Theme"="theme", 'Overall Rank'='rank',
                                  #"County"="NAMELSADCO", 
@@ -277,7 +274,15 @@ ui <- fluidPage(
                 selected = 1),
     varSelectInput("var", "Variable", dt, 
                    selected = 'rank'),
-    selectInput("measure", "Measure", 'Aggregated') 
+    selectInput("measure", "Measure", 'Aggregated'),
+    radioButtons("alpha",
+                 label = "Transparency Level",
+                 choices = c(.3, .5, .9),
+                 selected = .9,
+                 inline = TRUE),
+    # switchInput("scale",
+    #             label= 'Logarithmic Scale',
+    #             value = FALSE)
   # 
   #   # sliderInput('sampleSize', 'Sample Size', min=1, max=nrow(dataset),
   #   #             value=min(1000, nrow(dataset)), step=500, round=0),

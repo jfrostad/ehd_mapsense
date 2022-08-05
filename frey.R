@@ -10,6 +10,7 @@
 rm(list=ls())
 
 #set opts
+reload <- T #set true if you want to reprep all the data
 options(scipen=999) #readability
 #use cairo to render instead of quartz (quartz causes big slowdowns with geom_sf)
 if(!identical(getOption("bitmapType"), "cairo") && isTRUE(capabilities()[["cairo"]])){
@@ -28,10 +29,12 @@ package_lib    <- sprintf('%s_code/_lib/pkg_R', my_repo)
 ## Load libraries and  MBG project functions.
 .libPaths(package_lib)
 
+#TODO cleanup old packages
 pacman::p_load(tidyverse, readxl, snakecase, janitor, data.table, naniar, visdat,
                magrittr, scales, ggplot2, ggpubr, ggridges, ggrepel, gridExtra, isoband, RColorBrewer, 
                sf, viridis, farver, reldist, ggnewscale, ggallin,
                daff, waldo, tigris, tidycensus, ggcorrplot,
+               broom.mixed, ggstance, jtools,
                stargazer)
 
 #***********************************************************************************************************************
@@ -70,6 +73,7 @@ isOutlier <- function(x) {
 
 # ---PREP DATA----------------------------------------------------------------------------------------------------------
 ##read in and prep datasets for analysis##
+if(reload) {
 #names of themes have changed, make a map
 item_map <- file.path(data.dir, 'ehd_map_theme_names.csv') %>% fread
 
@@ -81,15 +85,15 @@ le_dt[, c('le', 'lower', 'upper') := lapply(.SD, as.numeric), .SDcols=c('le', 'l
 
 #also bring in the census tracts shapefile in order to do some cartography
 #can be downloaded from the census website using tigris
-#TODO fix bug in merge from this dataset causing NA tracts
-tract_sf <- tracts('WA', cb=T) #%>% 
-  #st_transform(32148) #%>% 
-  #erase_water(area_threshold = 0.9) #intersect with water overlay and remove
-
-tract_sf <- file.path(data.dir, 'shapefile', 'tl_2010_53_tract10.shp') %>%
-  st_read %>% 
-  mutate(GEOID=GEOID10) %>% 
-  st_simplify(preserveTopology = TRUE, dTolerance = 10)
+tract_sf <- tracts('WA', year=2010, cb=T) %>% 
+  st_transform(32148) %>% 
+  erase_water(area_threshold = 0.9) %>% #intersect with water overlay and remove
+  mutate(GEOID=GEOID10)
+# 
+# tract_sf <- file.path(data.dir, 'shapefile', 'tl_2010_53_tract10.shp') %>%
+#   st_read %>%
+#   mutate(GEOID=GEOID10) %>%
+#   st_simplify(preserveTopology = TRUE, dTolerance = 10)
 
 #use the water shapefile as an overlay
 counties_list <- counties('WA', cb=T)
@@ -128,11 +132,13 @@ measure_raw <- merge(ranks_old$measure_raw[, .(GEOID, item, item_short, theme, l
                        ranks_new$measure[, .(GEOID, item, theme, level,
                                              measure=measure_rank_val)],
                        by=c('GEOID', 'item', 'theme', 'level'), all=T) %>% 
-  .[, measure_shift := measure/measure_v1]
+  .[, measure_shift := measure-measure_v1] %>% 
+  .[, measure_ratio := measure/measure_v1] %>% 
+  .[measure_ratio %>% is.infinite, measure_ratio := NA] #0s create issues here
   
 #merge both measures datasets
 measure_dt <- merge(measure_ranks,
-                    measure_raw[, .(GEOID, item, measure, measure_v1, measure_shift)],
+                    measure_raw[, .(GEOID, item, measure, measure_v1, measure_shift, measure_ratio)],
                     by=c('GEOID', 'item'))
 
 #merge themes
@@ -204,7 +210,7 @@ out <- list(
   'tracts'=tract_sf,
   'water'=water_sf
 )
-saveRDS(out, file=file.path(out.dir, 'all_data.RDS'))
+save(out, file=file.path(out.dir, 'all_data.RData'))
 
 #reformat the data long to simplify for the mapping tool
 #TODO - eventually i think it makes sense to adapt all future code to use this long version
@@ -216,27 +222,32 @@ dt[item=='Aggregated', item_short := 'Agg'] #TODO fix earlier
 dt <- dt[!(is.na(item_short))] #rows that didn't have data for v1
 
 #make it possible to use a logged scale on measure, which tends skewed
-dt[, measure_trans := log(measure + 0.001)]
-dt[item %like% '%' & measure>0, measure_trans := car::logit(measure+0.001)]
+#dt[, measure_trans := log(measure + 0.001)]
+#dt[item %like% '%' & measure>0, measure_trans := car::logit(measure+0.001)]
+#dt[, measure_v1_trans := log(measure_v1 + 0.001)]
+#dt[item %like% '%' & measure_v1>0, measure_v1_trans := car::logit(measure_v1+0.001)]
 
 #save a  version of the data for the online mapping tool
 out <- list(
-  'data'=dt,
-  'tracts'=tract_sf,
-  'water'=water_sf,
-  'roads'=road_sf,
-  'places'=places_sf
+  'dt'=dt,
+  'tract_sf'=tract_sf,
+  'water_sf'=water_sf,
+  'road_sf'=road_sf,
+  'places_sf'=places_sf
 )
 
 saveRDS(out, file=file.path(vizdata.dir, 'viz_data.RDS'))
 
 #also save a csv of the lite data for edmund
 out <- list(
-  'data'=dt,
+  'dt'=dt,
   'tracts'=tract_sf
 )
 saveRDS(out, file=file.path(out.dir, 'lite_data.RDS'))
 write.csv(dt, file=file.path(out.dir, 'lite_data.csv'))
+
+} else file.path(vizdata.dir, 'viz_data.RDS') %>% readRDS %>% list2env(., globalenv())
+
 #***********************************************************************************************************************
 
 # ---MAP----------------------------------------------------------------------------------------------------------------
@@ -407,16 +418,54 @@ file.path(viz.dir, 'measure_shift_scatters.png') %>% ggsave(height=8, width=12)
 ##variable importance investigation##
 #regression analysis#
 #use logistic regression to find most influential vars
-reg_dt <- index_dt[, .(GEOID, impacted_new, impacted_old, index_new, index_shift, dropout)] %>% 
-  merge(measure_ranks[, .(GEOID, item, theme, measure_new, measure_old, measure_shift)], by='GEOID') %>% 
-  .[, dropout_int := dropout==1] %>% 
-  .[dropout_int %>% is.na, dropout_int:=0] #only regress on dropouts (not dropins)
+reg_dt <- rbind(
+  dt[level==3, .(GEOID, theme, item,
+                 measure, measure_v1, measure_shift, shift_type='shift',
+                 impacted, impacted_v1, dropout_factor=dropout)],
+  dt[level==3, .(GEOID, theme, item,
+                 measure, measure_v1, measure_shift=measure_ratio, shift_type='ratio',
+                 impacted, impacted_v1, dropout_factor=dropout)]
+  ) %>% 
+  merge(dt[level==1, .(GEOID, overall=rank, overall_v1=rank_v1, overall_shift=rank_shift)], by='GEOID') %>% 
+  .[, dropout := dropout_factor=='Dropout'] %>% 
+  .[, dropin := dropout_factor=='Addition'] %>% 
+  na.omit
 
-mod1 <- glm(dropout_int ~ item:measure_shift, data=reg_dt, family='binomial')
-stargazer(mod1, type='html') %>% 
+mod1 <- glm(dropout_factor ~ item:measure_shift, data=reg_dt[shift_type=='shift'], family='binomial')
+mod2 <- glm(dropout ~ item:measure_shift, data=reg_dt[shift_type=='shift'], family='binomial')
+mod3 <- glm(dropin ~ item:measure_shift, data=reg_dt[shift_type=='shift'], family='binomial')
+mod4 <- glm(dropout_factor ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
+mod5 <- glm(dropout ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
+mod6 <- glm(dropin ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
+stargazer(mod1, mod2, mod3, mod4, mod5, mod6,
+          type='html') %>% 
   capture.output(file=file.path(out.dir, 'table_1.html'))
+plot_summs(mod1, mod2, mod3, mod4, mod5, mod6,
+           #plot.distributions = TRUE, inner_ci_level = .9,
+           model.names = c("drops vs shift", 
+                           "dropouts vs shift", 
+                           "dropins vs shift",
+                           'drops vs ratio',
+                           'dropouts vs ratio',
+                           'dropins vs ratio')
+)
+file.path(viz.dir, 'regression_1_coefplot.png') %>% ggsave(height=8, width=12)
 
-mod2 <- glm(index_shift ~ item:measure_shift, data=reg_dt, family='gaussian')
+  plot_summs(mod1, mod2, mod3, 
+             model.names = c("drops vs shift", 
+                             "dropouts vs shift", 
+                             "dropins vs shift")
+  )
+  file.path(viz.dir, 'regression_1_coefplota.png') %>% ggsave(height=8, width=12)
+  
+  plot_summs(mod4, mod5, mod6, 
+             model.names = c("drops vs ratio", 
+                             "dropouts vs ratio", 
+                             "dropins vs ratio")
+  )
+  file.path(viz.dir, 'regression_1_coefplotb.png') %>% ggsave(height=8, width=12)
+
+mod2 <- glm(overall_shift ~ item:measure_shift, data=reg_dt, family='gaussian')
 stargazer(mod1, mod2, 
           type='html',
           title="Regression Results", dep.var.labels=c("Dropouts","Index Movement"), 

@@ -36,11 +36,15 @@ cartographeR <- function(shapefile=tract_sf, dt,
   #make variable to plot
   if(scale_type=='cont') dt[, map_var := get(map_varname)] 
   else dt[, map_var := get(map_varname) %>% as.factor]
-  dt <- dt[!(map_var%in%-1)] #remove the -1s which represent nonmissing NAs (plot as NA)
+  
+  #cleanup missing data
+  #remove the -1s which represent nonmissing NAs (plot as NA)
+  #but note that there can be negatives for the change vars
+  if(!(map_varname %like% 'shift|dropout')) dt <- dt[map_var>=0] 
   
   #cleanup geocodes if needed
   if(filter_geocodes %>% is.character) dt <- dt[!(GEOID %in% filter_geocodes)]
-  
+
   #merge dropouts to shapefile and plot
   shp <- shapefile %>% 
     merge(dt, by='GEOID', allow.cartesian=T) 

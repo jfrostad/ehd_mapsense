@@ -8,6 +8,7 @@
 # ----FUNCTIONS---------------------------------------------------------------------------------------------------------
 #custom function to build the EHD rankings, ported from chris' dplyr code (see scrap)
 rankeR <- function(dir, path,
+                   permute_var = '', #a variable to permute for our simulations
                          nranks=10, 
                          clean_names=F,
                          debug=F) {
@@ -67,6 +68,13 @@ rankeR <- function(dir, path,
     measure_dt <- setnames(measure_dt, 'item', 'item_old') %>% 
       merge(item_map, by='item_old')
   
+  }
+  
+  # Remap item names
+  if(permute_var %>% is.character) {
+    message('permuting by dropping: ', permute_var)
+    measure_dt <- measure_dt[item!=permute_var]
+    
   }
   
   # Calculate Ranks: Data Measures
@@ -160,13 +168,17 @@ rankeR <- function(dir, path,
     # Non-Missing Tract's WIth NA's Are Given A Measure Rank = -1
     .[index_rank_integer>nranks, index_rank_integer := nranks] %>% 
     .[index_rank_integer_cal>nranks, index_rank_integer_cal := nranks] %>% 
-    .[, qa_index := index_rank == index_rank_integer] #verify that calcs match published
+    .[, qa_index := index_rank == index_rank_integer] %>% #verify that calcs match published
+    .[, permutation := permute_var] #document the permute for this round
   
+  out <-
   list('measure'=measure_ranks,
        'theme'=theme_ranks,
        'index'=index_ranks,
-       'measure_raw'=measure_dt) %>% 
-    return
+       'measure_raw'=measure_dt)
+  
+  if(permute_var %>% is.character) return(index_ranks)
+  else return(out)
   
 }
 

@@ -10,7 +10,7 @@
 rm(list=ls())
 
 #set opts
-reload <- T #set true if you want to reprep all the data
+reload <- F #set true if you want to reprep all the data
 options(scipen=999) #readability
 #use cairo to render instead of quartz (quartz causes big slowdowns with geom_sf)
 if(!identical(getOption("bitmapType"), "cairo") && isTRUE(capabilities()[["cairo"]])){
@@ -19,9 +19,10 @@ if(!identical(getOption("bitmapType"), "cairo") && isTRUE(capabilities()[["cairo
 
 ## Set core_repo location
 user            <- Sys.info()['user']
-my_repo         <- ifelse(Sys.info()["sysname"] == "Linux",
-                          file.path('/homes', user, ''),
-                          file.path('C:/Users', user, 'Documents/ehd_mapsense/repo'))
+main.dir         <- ifelse(Sys.info()["sysname"] == "Linux",
+                           file.path('/homes', user, ''),
+                           file.path('C:/Users', user, 'Documents/ehd_mapsense/'))
+my_repo <- file.path(main.dir, 'repo')
 setwd(my_repo)
 
 #load packages
@@ -32,11 +33,13 @@ package_lib    <- sprintf('%s_code/_lib/pkg_R', my_repo)
 
 #TODO cleanup old packages
 pacman::p_load(tidyverse, readxl, snakecase, janitor, data.table, naniar, visdat,
-               magrittr, scales, ggplot2, ggpubr, ggridges, ggrepel, gridExtra, isoband, RColorBrewer, 
+               magrittr, scales, ggplot2, ggpubr, ggridges, ggrepel, gridExtra, RColorBrewer, 
                sf, viridis, farver, reldist, ggnewscale, ggallin,
-               daff, waldo, tigris, tidycensus, ggcorrplot,
-               broom.mixed, ggstance, jtools,
-               stargazer)
+               tigris, tidycensus, ggcorrplot,
+               broom.mixed, ggstance, jtools, factoextra,
+               stargazer,
+               caret, mlbench, randomForest,
+               zoo)
 
 #***********************************************************************************************************************
 
@@ -49,9 +52,9 @@ data_extract_EHDv1 <- 'ehd_data_v1.xlsx' #TODO rename
 data_extract_EHDv2 <- 'ehd_data_v3.xlsx' #TODO rename
 
 ###Output###
-out.dir <- file.path(my_repo, 'output')
-viz.dir  <- file.path(my_repo, 'viz')
-vizdata.dir  <- file.path(my_repo, '_code/baldR/data')
+out.dir <- file.path(main.dir, 'output')
+viz.dir  <- file.path(main.dir, 'viz')
+vizdata.dir  <- file.path(my_repo, 'code/baldR/data')
 #***********************************************************************************************************************
 
 # ---FUNCTIONS----------------------------------------------------------------------------------------------------------
@@ -105,7 +108,7 @@ places_sf <- places(state = 'WA', cb = T)
 
 #first read in and calculate all the ranks using custom function
 ranks_old <- rankeR(dir=data.dir, path=data_extract_EHDv1, clean_names=item_map, debug=F)
-ranks_new <- rankeR(dir=data.dir, path=data_extract_EHDv2) 
+ranks_new <- rankeR(dir=data.dir, path=data_extract_EHDv2, debug=T) 
 
 ##create comparisons##
 #merge measures (old v. new) to compare
@@ -187,10 +190,6 @@ measure_dt <- merge(measure_dt, index_dt[, .(GEOID, dropout, index=rank,
 theme_dt <- merge(theme_dt, index_dt[, .(GEOID, dropout, index=rank, 
                                          impacted, impacted_v1, life_expectancy)], by='GEOID')
 
-#drop water codes with weird data from maps
-drop_geocodes <- c('53057990100' #san juan water area with lots of big changes
-                   )
-
 #label the outliers
 #index_dt[, outlier_lab := ifelse(isOutlier(le), name, NA_character_), by=index_new]
 
@@ -249,25 +248,30 @@ write.csv(dt, file=file.path(out.dir, 'lite_data.csv'))
 # ---MAP----------------------------------------------------------------------------------------------------------------
 #create a manual diverging color scale to make sure that the index shifts are uniformly depicted
 div_colors <- RColorBrewer::brewer.pal(11, 'RdBu') %>% rev
-names(div_colors) <- unique(measure_ranks$measure_shift_capped) %>% sort
+names(div_colors) <- dt[, unique(rank_shift) %>% sort]
 
 #create a manual discrete color scale for the continuous index and make sure the color scale legend has all integers
-#cont_colors <- viridis::magma(n = 10)
+cont_colors <- viridis::magma(n = 10)
 #update colors with allies scale
-cont_colors <- c(
-  rgb(248, 250, 251, maxColorValue = 255), # 1:     Red: 248, Green: 250, Blue: 251
-  rgb(236, 242, 246, maxColorValue = 255), # 2:     Red: 236, Green: 242, Blue: 246
-  rgb(220, 230, 239, maxColorValue = 255), # 3:     Red: 220, Green: 230, Blue: 239
-  rgb(203, 218, 233, maxColorValue = 255), # 4:     Red: 203, Green: 218, Blue: 233
-  rgb(194, 199, 223, maxColorValue = 255), # 5:     Red: 194, Green: 199, Blue: 223
-  rgb(194, 178, 213, maxColorValue = 255), # 6:     Red: 194, Green: 178, Blue: 213
-  rgb(192, 157, 203, maxColorValue = 255), # 7:     Red: 192, Green: 157, Blue: 203
-  rgb(189, 132, 186, maxColorValue = 255), # 8:     Red: 189, Green: 132, Blue: 186
-  rgb(161, 124, 177, maxColorValue = 255), # 9:     Red: 161, Green: 124, Blue: 177
-  rgb(163, 124, 162, maxColorValue = 255) # 10:   Red: 163, Green: 124, Blue: 162
-)
+# cont_colors <- c(
+#   rgb(248, 250, 251, maxColorValue = 255), # 1:     Red: 248, Green: 250, Blue: 251
+#   rgb(236, 242, 246, maxColorValue = 255), # 2:     Red: 236, Green: 242, Blue: 246
+#   rgb(220, 230, 239, maxColorValue = 255), # 3:     Red: 220, Green: 230, Blue: 239
+#   rgb(203, 218, 233, maxColorValue = 255), # 4:     Red: 203, Green: 218, Blue: 233
+#   rgb(194, 199, 223, maxColorValue = 255), # 5:     Red: 194, Green: 199, Blue: 223
+#   rgb(194, 178, 213, maxColorValue = 255), # 6:     Red: 194, Green: 178, Blue: 213
+#   rgb(192, 157, 203, maxColorValue = 255), # 7:     Red: 192, Green: 157, Blue: 203
+#   rgb(189, 132, 186, maxColorValue = 255), # 8:     Red: 189, Green: 132, Blue: 186
+#   rgb(161, 124, 177, maxColorValue = 255), # 9:     Red: 161, Green: 124, Blue: 177
+#   rgb(163, 124, 162, maxColorValue = 255) # 10:   Red: 163, Green: 124, Blue: 162
+# )
 
 names(cont_colors) <- 1:10
+
+
+#drop water codes with weird data from maps
+drop_geocodes <- c('53057990100' #san juan water area with lots of big changes
+)
 
 #create a series of colored maps for the different vars in the dataset
   #denote tracts that dropped in or out of high impact
@@ -346,7 +350,7 @@ names(cont_colors) <- 1:10
 ##other plots for the technical report and exploring some of the changes##
 #reshape wide in order to run cor
 corr_dt <- measure_ranks[, .(GEOID, item=paste0(theme, ': ', item), measure_new)] %>% 
-  dcast(geocode~item, value.var=c('measure_new')) %>% 
+  dcast(GEOID~item, value.var=c('measure_new')) %>% 
   na.omit %>% 
   .[, -c('GEOID'), with=F] #drop the the geocode variable from this figure
   
@@ -408,58 +412,787 @@ ggplot(dt[level==3], aes(x=rank_v1, rank, color=dropout) ) +
 #save the plot
 file.path(viz.dir, 'measure_shift_scatters.png') %>% ggsave(height=8, width=12)
 
+#county level plots
+most_pop <- c('King', 'Pierce', 'Snohomish', 'Spokane', 'Clark', 'Thurston', 'Kitsap', 'Yakima', 'Whatcom', 'Benton',
+              'Skagit', 'Cowlitz', 'Grant', 'Franklin', 'Island')
+plot_dt <- merge(dt,
+                 le_dt[, .(county, GEOID=geocode)],
+                 by='GEOID')
+
+#all counties-overall
+ggplot(plot_dt[level==1], aes(x=rank, y=forcats::fct_reorder(county, rank, .fun=mean),
+                                                     fill = stat(x))) +
+  stat_density_ridges(geom = "density_ridges_gradient", calc_ecdf = TRUE) +
+  scale_fill_viridis_c(name = "Ranking", direction = -1, option='plasma') +
+  scale_y_discrete('Counties') +
+  theme_bw()
+file.path(viz.dir, 'overall_ridges_counties.png') %>% ggsave(height=8, width=12)
+
+#top 10 most populous counties
+ggplot(plot_dt[level==1 & county %in% most_pop], aes(x=rank, y=forcats::fct_reorder(county, rank, .fun=mean),
+                                        fill = stat(x))) +
+  stat_density_ridges(geom = "density_ridges_gradient", calc_ecdf = TRUE) +
+  scale_fill_viridis_c(name = "Ranking", direction = -1, option='plasma') +
+  scale_y_discrete('Counties (Top 10 by Population)') +
+  theme_bw()
+
+  file.path(viz.dir, 'overall_ridges_most_pop_counties.png') %>% ggsave(height=8, width=12)
+  
+  ggplot(plot_dt[level==3 & county %in% most_pop], aes(x=rank, y=forcats::fct_reorder(county, index, .fun=mean),
+                                                       fill = stat(x))) +
+    stat_density_ridges(geom = "density_ridges_gradient", calc_ecdf = TRUE) +
+    scale_fill_viridis_c(name = "Ranking", direction = -1, option='plasma') +
+    facet_wrap(~item_short) +
+    geom_vline(xintercept = 8.5, linetype='dashed', color='dark red') +
+    scale_y_discrete('Counties (Top 10 by Population)') +
+    theme_minimal()
+  file.path(viz.dir, 'item_ridges_most_pop_counties.png') %>% ggsave(height=8, width=12)
+  
 #***********************************************************************************************************************
 
 # ---ANALYZE------------------------------------------------------------------------------------------------------------
 ##variable importance investigation##
+#simulation analysis#
+#first read in and calculate all the ranks using custom function
+ranks_per <- lapply(unique(dt$item)[-1] %>% as.character,
+                    rankeR,
+                    dir=data.dir, 
+                    path=data_extract_EHDv2,
+                    nranks=10, 
+                    clean_names=F) %>% 
+    rbindlist %>% 
+    .[, .(GEOID, permute_rank=index_rank_integer, permutation)]
+  
+ranks_per <- merge(ranks_per,
+                   dt[level==1],
+                   by='GEOID',
+                   allow.cartesian=T)  
+
+#also merge on the theme names for coloring
+
+ranks_per <- merge(ranks_per[, `:=`(item = NULL, theme = NULL)],
+             dt[level==3, .(item, theme)] %>% unique(by='item'),
+             by.x='permutation',
+             by.y = 'item')  
+
+#identify dropout units based on impacted threshold of >8
+threshold_val <- 9
+ranks_per[, permute_impacted := 0]
+ranks_per[permute_rank>=threshold_val, permute_impacted := 1]
+ranks_per[, permute_shift := permute_rank-rank]
+
+rank_uncertainty <- ranks_per[, range:=max(permute_rank)-min(permute_rank), by=GEOID] %>% 
+  .[, rank_acc := sum(permute_rank==rank)/.N, by=GEOID] %>% 
+  .[, impacted_acc := sum(impacted==permute_impacted)/.N, by=GEOID] %>% 
+  unique(by='GEOID')
+
+cartographeR(dt=rank_uncertainty, map_varname = 'range', map_label = 'Range in Ranking',
+             map_title = 'Rank Range', scale_type='cont')
+cartographeR(dt=rank_uncertainty, map_varname = 'rank_acc', map_label = 'Accuracy',
+             map_title = 'Accuracy of Ranking', scale_type='cont')
+cartographeR(dt=rank_uncertainty, map_varname = 'impacted_acc', map_label = 'Accuracy',
+             map_title = 'Accuracy of Impacted Classification', scale_type='cont')
+
+ggplot(rank_uncertainty, aes(x=rank, range, color=rank_shift %>% as.factor) ) +
+  geom_point(position='jitter') +
+  scale_color_viridis_d('Change in Rank') +
+  theme_bw() 
+
+file.path(viz.dir, 'rank_range_scatters.png') %>% ggsave(height=8, width=12)
+
+ggplot(rank_uncertainty, aes(x=rank, rank_acc, color=rank_shift %>% as.factor) ) +
+  geom_point(position='jitter') +
+  scale_color_viridis_d('Change in Rank') +
+  theme_bw() 
+
+file.path(viz.dir, 'rank_acc_scatters.png') %>% ggsave(height=8, width=12)
+
+var_imp <- ranks_per.[, importance_mean := mean(abs(permute_rank-rank)), by=permutation] %>% 
+  .[, importance_max := max(abs(permute_rank-rank)), by=permutation] %>% 
+  .[, importance_acc :=sum(impacted==permute_impacted)/.N, by=permutation] %>% 
+  unique(by='permutation')
+
+ggplot(var_imp, aes(x=forcats::fct_reorder(permutation, importance_max), 
+                    y=importance_max,
+                    color=theme)) +
+  geom_point() + 
+  geom_segment( aes(x=permutation, xend=permutation, y=0, yend=importance_max)) +
+  theme_bw() +
+  scale_color_brewer('Theme', palette='Paired') +
+  coord_flip()
+file.path(viz.dir, 'rank_importance_max_lolli.png') %>% ggsave(height=8, width=12)
+
+ggplot(var_imp, aes(x=forcats::fct_reorder(permutation, importance_mean), 
+                    y=importance_mean,
+                    color=theme)) +
+  geom_point() + 
+  geom_segment( aes(x=permutation, xend=permutation, y=0, yend=importance_mean)) +
+  theme_bw() +
+  scale_color_brewer('Theme', palette='Paired') +
+  coord_flip()
+file.path(viz.dir, 'rank_importance_mean_lolli.png') %>% ggsave(height=8, width=12)
+
+ggplot(var_imp, aes(x=forcats::fct_reorder(permutation, importance_acc), 
+                    y=importance_acc,
+                    color=theme)) +
+  geom_point() + 
+  geom_segment( aes(x=permutation, xend=permutation, y=0, yend=importance_acc)) +
+  theme_bw() +
+  scale_color_brewer('Theme', palette='Paired') +
+  coord_flip()
+file.path(viz.dir, 'rank_importance_acc_lolli.png') %>% ggsave(height=8, width=12)
+
+
+
+ggplot(ranks_per, aes(x=permute_shift, y=forcats::fct_reorder(permutation, permute_shift, .fun=mean),
+                                                     )) +
+  geom_density_ridges(stat='binline') +
+  scale_fill_viridis_c(name = "Index Ranking Change", direction = -1, option='plasma') +
+  scale_y_discrete('Permuted Item') +
+  theme_bw()
+file.path(viz.dir, 'rank_importance_ridges.png') %>% ggsave(height=8, width=12)
+
+
 #regression analysis#
 #use logistic regression to find most influential vars
 reg_dt <- rbind(
-  dt[level==3, .(GEOID, theme, item,
-                 measure, measure_v1, measure_shift, shift_type='shift',
+  dt[level==3, .(GEOID, theme, item_short,
+                 measure, measure_v1, rank_shift, measure_shift, shift_type='shift',
                  impacted, impacted_v1, dropout_factor=dropout)],
-  dt[level==3, .(GEOID, theme, item,
+  dt[level==3, .(GEOID, theme, item_short,
                  measure, measure_v1, measure_shift=measure_ratio, shift_type='ratio',
-                 impacted, impacted_v1, dropout_factor=dropout)]
-  ) %>% 
+                 impacted, impacted_v1, dropout_factor=dropout)],
+  fill=T) %>% 
   merge(dt[level==1, .(GEOID, overall=rank, overall_v1=rank_v1, overall_shift=rank_shift)], by='GEOID') %>% 
   .[, dropout := dropout_factor=='Dropout'] %>% 
   .[, dropin := dropout_factor=='Addition'] %>% 
   na.omit
 
-mod1 <- glm(dropout_factor ~ item:measure_shift, data=reg_dt[shift_type=='shift'], family='binomial')
-mod2 <- glm(dropout ~ item:measure_shift, data=reg_dt[shift_type=='shift'], family='binomial')
-mod3 <- glm(dropin ~ item:measure_shift, data=reg_dt[shift_type=='shift'], family='binomial')
-mod4 <- glm(dropout_factor ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
-mod5 <- glm(dropout ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
-mod6 <- glm(dropin ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
-stargazer(mod1, mod2, mod3, mod4, mod5, mod6,
+#create a transformed version of measure shift to deal with skewness
+reg_dt[, measure_shift_log := sign(measure_shift)*log(abs(measure_shift)+0.0001)]
+reg_dt[, measure_shift_scale := scale(measure_shift)]
+reg_dt[, item_fac := paste0(theme, ': ', item_short) %>% factor]
+
+#
+ggplot(reg_dt, aes(x=overall_shift, rank_shift, color=overall %>% as.factor) ) +
+  geom_point(position='jitter') +
+  #geom_hex(bins = 70) +
+  facet_wrap(~item_short) + 
+  facet_wrap(~item_short) + 
+  scale_color_viridis_d('Overall Rank') +
+  theme_bw() 
+
+#save the plot
+file.path(viz.dir, 'rank_shift_scatters.png') %>% ggsave(height=8, width=12)
+
+#
+ggplot(reg_dt, aes(x=overall_shift, measure_shift_log, color=overall %>% as.factor) ) +
+  geom_point(position='jitter') +
+  #geom_hex(bins = 70) +
+  facet_wrap(~item_short) + 
+  scale_color_viridis_d('Overall Rank') +
+  theme_bw() 
+
+#save the plot
+file.path(viz.dir, 'measure_shift_scatters.png') %>% ggsave(height=8, width=12)
+
+#generate dataset to run PCA 
+pca_dt <-
+  dt[level==3, .(GEOID, theme, item_short, rank, rank_v1,
+                 measure, measure_v1, rank_shift, measure_shift, dropout_factor=dropout)] %>% 
+  merge(dt[level==1, .(GEOID, overall=rank, overall_v1=rank_v1, overall_shift=rank_shift)], by='GEOID')
+
+#pca model#1 = pca on current raw measure
+pca_mod <- pca_dt[, .(GEOID, item_short, measure)] %>% 
+  dcast(GEOID~item_short, value.var=c('measure'))  %>% 
+  na.omit %>% 
+  .[, -c('GEOID'), with=F] %>% 
+  prcomp(scale=T)
+
+#screeplot
+fviz_eig(pca_mod)
+file.path(viz.dir, 'pc_raw_eig.png') %>% ggsave(height=8, width=12)
+fviz_contrib(pca_mod, choice='var', axes=1)
+file.path(viz.dir, 'pc_raw_contribution_v1.png') %>% ggsave(height=8, width=12)
+fviz_contrib(pca_mod, choice='var', axes=2)
+file.path(viz.dir, 'pc_raw_contribution_v2.png') %>% ggsave(height=8, width=12)
+
+fviz_pca_var(pca_mod,
+             col.var = "contrib", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+)
+file.path(viz.dir, 'pc_raw_var.png') %>% ggsave(height=8, width=12)
+
+#pca model#2 = pca on current rank
+pca_mod <- pca_dt[, .(GEOID, item_short, rank)] %>% 
+  dcast(GEOID~item_short, value.var=c('rank'))  %>% 
+  na.omit %>% 
+  .[, -c('GEOID'), with=F] %>% 
+  prcomp(scale=T)
+
+#screeplot
+fviz_eig(pca_mod)
+file.path(viz.dir, 'pc_rank_eig.png') %>% ggsave(height=8, width=12)
+fviz_contrib(pca_mod, choice='var', axes=1)
+file.path(viz.dir, 'pc_rank_contribution_v1.png') %>% ggsave(height=8, width=12)
+fviz_contrib(pca_mod, choice='var', axes=2)
+file.path(viz.dir, 'pc_rank_contribution_v2.png') %>% ggsave(height=8, width=12)
+fviz_contrib(pca_mod, choice='var', axes=3)
+file.path(viz.dir, 'pc_rank_contribution_v3.png') %>% ggsave(height=8, width=12)
+
+fviz_pca_var(pca_mod,
+             col.var = "contrib", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+)
+file.path(viz.dir, 'pc_rank_var.png') %>% ggsave(height=8, width=12)
+
+#make predictions of pca #1/2s so that we can map them 
+pred_dt <- pca_dt[, .(GEOID, item_short, rank)] %>% 
+  dcast(GEOID~item_short, value.var=c('rank')) %>% 
+  cbind(., predict(pca_mod, newdata=.)[,1:3]) %>% 
+  .[,level:=3] #remind data that its most granular
+
+#map the first 3 elements of PCA
+cartographeR(dt=pred_dt, map_varname = 'PC1', map_label = 'PCA #1',
+             map_title = 'Mapping the first component of PCA using the ranked measures',
+             scale_type='cont_grad', 
+             lvl=3)
+cartographeR(dt=pred_dt, map_varname = 'PC2', map_label = 'PCA #2',
+             map_title = 'Mapping the second component of PCA using the ranked measures',
+             scale_type='cont_grad', 
+             lvl=3)
+cartographeR(dt=pred_dt, map_varname = 'PC3', map_label = 'PCA #3',
+             map_title = 'Mapping the third component of PCA using the ranked measures',
+             scale_type='cont_grad', 
+             lvl=3)
+
+#impute missing variables with minimum then run
+#TODO try instead imputePCA command in the missMDA? 
+pca_dt <-
+  dt[level==3, .(GEOID, theme, item_short, rank, rank_v1,
+                 measure, measure_v1, rank_shift, measure_shift, dropout_factor=dropout)] %>% 
+  merge(dt[level==1, .(GEOID, overall=rank, overall_v1=rank_v1, overall_shift=rank_shift)], by='GEOID') %>% 
+  .[, rank := na.aggregate(rank, FUN= min) , by = item_short]
+
+#pca model#3 = pca on current rank with minimputation
+pca_mod <- pca_dt[, .(GEOID, item_short, rank)] %>% 
+  dcast(GEOID~item_short, value.var=c('rank'))  %>% 
+  na.omit %>% 
+  .[, -c('GEOID'), with=F] %>% 
+  prcomp(scale=T)
+
+
+#screeplot
+fviz_eig(pca_mod)
+file.path(viz.dir, 'pc_rank_min_eig.png') %>% ggsave(height=8, width=12)
+fviz_contrib(pca_mod, choice='var', axes=1)
+file.path(viz.dir, 'pc_rank_min_contribution_v1.png') %>% ggsave(height=8, width=12)
+fviz_contrib(pca_mod, choice='var', axes=2)
+file.path(viz.dir, 'pc_rank_min_contribution_v2.png') %>% ggsave(height=8, width=12)
+fviz_contrib(pca_mod, choice='var', axes=3)
+file.path(viz.dir, 'pc_rank_min_contribution_v3.png') %>% ggsave(height=8, width=12)
+
+fviz_pca_var(pca_mod,
+             col.var = "contrib", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+)
+file.path(viz.dir, 'pc_rank_min_var.png') %>% ggsave(height=8, width=12)
+
+pred_dt <- pca_dt[, .(GEOID, item_short, rank)] %>% 
+  dcast(GEOID~item_short, value.var=c('rank')) %>% 
+  .[is.na(`Wastewater Discharge`), 'Wastewater Discharge' := 0] %>%  #impute wastewater
+  cbind(., predict(pca_mod, newdata=.)[,1:3]) %>% 
+  .[,level:=3] #remind data that its most granular
+
+#map the first 3 elements of PCA
+cartographeR(dt=pred_dt, map_varname = 'PC1', map_label = 'PCA #1',
+             map_title = 'Mapping the first component of PCA using the ranked measures',
+             scale_type='cont_grad', 
+             lvl=3)
+cartographeR(dt=pred_dt, map_varname = 'PC2', map_label = 'PCA #2',
+             map_title = 'Mapping the second component of PCA using the ranked measures',
+             scale_type='cont_grad', 
+             lvl=3)
+cartographeR(dt=pred_dt, map_varname = 'PC3', map_label = 'PCA #3',
+             map_title = 'Mapping the third component of PCA using the ranked measures',
+             scale_type='cont_grad', 
+             lvl=3)
+
+#regress the PCs against the overall ranking
+mod_dt <- pred_dt[, .(GEOID, PC1, PC2, PC3)] %>% 
+  merge( dt[level==3, .(GEOID, rank, impacted, dropout)], by='GEOID') 
+  
+mod <- lm(rank~PC1+PC2+PC3, data=mod_dt)
+mod <- lm(impacted~PC1+PC2+PC3, data=mod_dt)
+mod <- lm(dropout~PC1+PC2+PC3, data=mod_dt)
+#use machine learning models to # #try first with a rf model
+# # prepare training scheme
+# control <- trainControl(method="repeatedcv", number=5, repeats=3)
+# # train the model
+# model <- mod_dt[, .(GEOID, item_short, rank, overall)] %>% 
+#   dcast(GEOID+overall~item_short, value.var=c('rank')) %>% 
+#   .[, -c('GEOID'), with=F] %>% 
+#   na.omit %>% 
+#   train(overall~., data=., method="rf", preProcess="scale", trControl=control)
+# # estimate variable importance
+# importance <- varImp(model, scale=FALSE)
+# 
+# # train the model
+# model <- mod_dt[, .(GEOID, item_short, rank, overall)] %>% 
+#   dcast(GEOID+overall~item_short, value.var=c('rank')) %>% 
+#   .[, -c('GEOID'), with=F] %>% 
+#   na.omit %>% 
+#   train(overall~., data=., method="pls", preProcess="scale", trControl=control)
+# # estimate variable importance
+# importance <- varImp(model, scale=FALSE)do some feature selection
+#build a dataset
+mod_dt <-
+  dt[level==3, .(GEOID, theme, item_short, rank, rank_v1,
+                 measure, measure_v1, rank_shift, measure_shift, dropout_factor=dropout,
+                 le=substr(life_expectancy, 1, 4) %>% as.numeric)] %>% 
+  merge(dt[level==1, .(GEOID, overall=rank, overall_v1=rank_v1, overall_shift=rank_shift)], by='GEOID') %>% 
+  .[, measure := na.aggregate(measure, FUN= min) , by = item_short] %>%
+  .[, rank := na.aggregate(rank, FUN= min) , by = item_short]
+
+set.seed(98118)
+
+#deepen our pls model by doing some tuning of the grid
+mod_dt <- mod_dt[, .(GEOID, item_short, rank, overall)] %>% 
+  dcast(GEOID+overall~item_short, value.var=c('rank')) %>% 
+  .[, -c('GEOID'), with=F] %>% 
+  na.omit
+train_scheme <- createDataPartition(mod_dt$overall, p = .80, list = FALSE)
+train_dt <- mod_dt[train_scheme,]
+test_dt  <- mod_dt[-train_scheme,]
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+)
+
+tuneGrid <- expand.grid(
+  ncomp   = seq(1, 10, by = 1)
+)
+
+#show RMSE
+model <- train(
+  overall ~ .,
+  data = train_dt,
+  method = 'pls',
+  preProcess = c("center", "scale"),
+  trControl = ctrl,
+  tuneGrid = tuneGrid
+)
+
+#also run a simpler pls with 3 comps
+y_mat <- as.matrix(mod_dt[,1])
+x_mat <- as.matrix(mod_dt[,2:ncol(mod_dt)])
+mod <- pls::mvr(y_mat  ~ x_mat , ncomp=10, method = "oscorespls" , scale = T)
+
+pc_dt <- mod$Yscores %>% as.matrix %>% .[,1:3] %>% as.data.table %>% setnames(c('PLS_C1', 'PLS_C2', 'PLS_C3'))
+
+pc_dt <- 
+  dt[level==3, .(GEOID, theme, item_short, rank, rank_v1,
+                 measure, measure_v1, rank_shift, measure_shift, dropout_factor=dropout,
+                 le=substr(life_expectancy, 1, 4) %>% as.numeric)] %>% 
+  merge(dt[level==1, .(GEOID, overall=rank, overall_v1=rank_v1, overall_shift=rank_shift)], by='GEOID') %>% 
+  .[, measure := na.aggregate(measure, FUN= min) , by = item_short] %>%
+  .[, rank := na.aggregate(rank, FUN= min) , by = item_short] %>% 
+  dcast(GEOID+overall~item_short, value.var=c('rank')) %>% 
+  na.omit %>% 
+  .[,1] %>% 
+  cbind(., pc_dt) %>% 
+  .[, level:=3]
+
+#map the first 3 elements of PCA
+cartographeR(dt=pc_dt, map_varname = 'PLS_C1', map_label = 'PLS #1',
+             map_title = 'Mapping the first component of PLS using the ranked measures',
+             scale_type='cont_grad', 
+             lvl=3)
+cartographeR(dt=pc_dt, map_varname = 'PLS_C2', map_label = 'PLS #2',
+             map_title = 'Mapping the second component of PLS using the ranked measures',
+             scale_type='cont_grad', 
+             lvl=3)
+cartographeR(dt=pc_dt, map_varname = 'PLS_C3', map_label = 'PLS #3',
+             map_title = 'Mapping the third component of PLS using the ranked measures',
+             scale_type='cont_grad', 
+             lvl=3)
+
+#deepen our pls model by doing some tuning of the grid
+set.seed(98118)
+mod_dt <- mod_dt[, .(GEOID, item_short, rank, overall)] %>% 
+  dcast(GEOID+overall~item_short, value.var=c('rank')) %>% 
+  .[, -c('GEOID'), with=F]
+
+S_plsr <- scores(mod)[, comps= 1:2, drop = FALSE]
+cl_plsr <- cor(model.matrix(mod), S_plsr)
+df_cor <- as.data.frame(cl_plsr)
+
+df_depend_cor <- as.data.frame(cor(mod_dt[,1], S_plsr))
+
+plot_loading_correlation  <-  rbind(df_cor ,
+                                    df_depend_cor)
+plot_loading_correlation1 <- setNames(plot_loading_correlation, c("comp1", "comp2"))
+
+
+#Function to draw circle
+circleFun <- function(center = c(0,0),diameter = 1, npoints = 100){
+  r = diameter / 2
+  tt <- seq(0,2*pi,length.out = npoints)
+  xx <- center[1] + r * cos(tt)
+  yy <- center[2] + r * sin(tt)
+  return(data.frame(x = xx, y = yy))
+}
+
+dat_plsr <- circleFun(c(0,0),2,npoints = 100)
+
+ggplot(data=plot_loading_correlation1 , aes(comp1, comp2))+
+  ylab("")+xlab("")+ggtitle(" ")+
+  theme_bw() +
+  geom_hline(aes(yintercept = 0), size=.2, linetype = 3)+ 
+  geom_vline(aes(xintercept = 0), size=.2, linetype = 3)+
+  geom_text_repel(aes(label=rownames(plot_loading_correlation1), 
+                      colour=ifelse(rownames(plot_loading_correlation1)!='dependent', 'red','darkblue')))+
+  scale_color_manual(values=c("red","darkblue"))+
+  scale_x_continuous(breaks = c(-1,-0.5,0,0.5,1))+
+  scale_y_continuous(breaks = c(-1,-0.5,0,0.5,1))+
+  coord_fixed(ylim=c(-1, 1),xlim=c(-1, 1))+xlab("axis 1")+ 
+  ylab("axis 2")+ theme(axis.line.x = element_line(color="darkgrey"),
+                        axis.line.y = element_line(color="darkgrey"))+
+  geom_path(data=dat_plsr ,
+            aes(x,y), colour = "darkgrey")+
+  theme(legend.title=element_blank())+
+  theme(axis.ticks = element_line(colour = "black"))+
+  theme(axis.title = element_text(colour = "black"))+
+  theme(axis.text = element_text(color="black"))+
+  theme(legend.position='none')+
+  theme(panel.grid.minor = element_blank()) +
+  geom_segment(data=plot_loading_correlation1, aes(x=0, y=0, xend=comp1, yend=comp2), 
+               arrow=arrow(length=unit(0.2,"cm")), alpha=0.75, 
+               colour=ifelse(rownames(plot_loading_correlation1)=='dependent', 'red','darkblue'))
+
+VIP <- function(object) {
+  if (object$method != "oscorespls")
+    stop("Only implemented for orthogonal scores algorithm.  Refit with 'method = \"oscorespls\"'")
+  if (nrow(object$Yloadings) > 1)
+    stop("Only implemented for single-response models")
+  
+  SS <- c(object$Yloadings)^2 * colSums(object$scores^2)
+  Wnorm2 <- colSums(object$loading.weights^2)
+  SSW <- sweep(object$loading.weights^2, 2, SS / Wnorm2, "*")
+  sqrt(nrow(SSW) * apply(SSW, 1, cumsum) / cumsum(SS))
+}
+
+
+df_vip  <- as.data.frame(VIP(model$finalModel))
+
+df_coef <- as.data.frame(coef(model$finalModel, ncomp =1:3)) %>% 
+  setnames(., c('PC1', 'PC2', 'PC3')) %>% 
+  dplyr::mutate(variables = rownames(.)) %>% 
+  as.data.table %>% 
+  .[, variables := stringr::str_replace_all(variables, stringr::fixed("\\"), '')]  %>% 
+  .[, variables := stringr::str_replace_all(variables, stringr::fixed("``"), '')]
+
+#also merge on the theme names for coloring
+
+df_coef <- merge(df_coef,
+                   dt[level==3, .(item_short, theme)] %>% unique(by='item_short'),
+                   by.x='variables',
+                   by.y = 'item_short')  
+
+p2_coef <-
+  ggplot(df_coef, aes(x = forcats::fct_reorder(variables, PC1), y = PC1, group = 1, fill=theme))+  
+  geom_bar(stat = "identity")+
+  theme(axis.text.x = element_text(angle=65,
+                                   hjust=1,
+                                   size = 8),
+        axis.title.y = element_text(size = 2))+
+  theme_bw()+
+  scale_fill_brewer('Theme', palette='Paired') +
+  coord_flip()
+file.path(viz.dir, 'pls_loadings_pc1.png') %>% ggsave(height=8, width=12)
+
+p2_coef <-
+  ggplot(df_coef, aes(x = forcats::fct_reorder(variables, PC2), y = PC2, group = 1, fill=theme))+  
+  geom_bar(stat = "identity")+
+  theme(axis.text.x = element_text(angle=65,
+                                   hjust=1,
+                                   size = 8),
+        axis.title.y = element_text(size = 2))+
+  theme_bw()+
+  scale_fill_brewer('Theme', palette='Paired') +
+  coord_flip()
+file.path(viz.dir, 'pls_loadings_pc2.png') %>% ggsave(height=8, width=12)
+
+p2_coef <-
+  ggplot(df_coef, aes(x = forcats::fct_reorder(variables, PC3), y = PC3, group = 1, fill=theme))+  
+  geom_bar(stat = "identity")+
+  theme(axis.text.x = element_text(angle=65,
+                                   hjust=1,
+                                   size = 8),
+        axis.title.y = element_text(size = 2))+
+  theme_bw()+
+  scale_fill_brewer('Theme', palette='Paired') +
+  coord_flip()
+file.path(viz.dir, 'pls_loadings_pc3.png') %>% ggsave(height=8, width=12)
+
+
+ggplot(var_imp, aes(x=forcats::fct_reorder(permutation, importance_acc), 
+                    y=importance_acc,
+                    color=theme)) +
+  geom_point() + 
+  geom_segment( aes(x=permutation, xend=permutation, y=0, yend=importance_acc)) +
+  theme_bw() +
+  scale_color_brewer('Theme', palette='Paired') +
+  coord_flip()
+file.path(viz.dir, 'rank_importance_acc_lolli.png') %>% ggsave(height=8, width=12)
+
+
+#lets try it again using a classification model on dropouts
+mod_dt <-
+  dt[level==3, .(GEOID, theme, item_short, rank, rank_v1,
+                 measure, measure_v1, rank_shift, measure_shift, impacted=as.factor(impacted),
+                 le=substr(life_expectancy, 1, 4) %>% as.numeric)] %>% 
+  merge(dt[level==1, .(GEOID, overall=rank, overall_v1=rank_v1, overall_shift=rank_shift)], by='GEOID') %>% 
+  .[, measure := na.aggregate(measure, FUN= min) , by = item_short] %>%
+  .[, rank := na.aggregate(rank, FUN= min) , by = item_short] %>% 
+  .[, .(GEOID, item_short, rank, impacted)] %>% 
+  dcast(GEOID+impacted~item_short, value.var=c('measure')) %>% 
+  .[, -c('GEOID'), with=F] %>% 
+  na.omit
+
+train_dt <- mod_dt[train_scheme,]
+test_dt  <- mod_dt[-train_scheme,]
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+)
+
+tuneGrid <- expand.grid(
+  ncomp   = seq(1, 10, by = 1)
+)
+
+#show RMSE
+model <- train(
+  impacted ~ .,
+  metric='Accuracy',
+  data = train_dt,
+  method = 'pls',
+  preProcess = c("center", "scale"),
+  trControl = ctrl,
+  tuneGrid = tuneGrid
+)
+
+#run boruta using life expectancy as target
+boruta_mod <- mod_dt[, .(GEOID, item_short, measure, le)] %>% 
+  dcast(GEOID+le~item_short, value.var=c('measure')) %>% 
+  .[, -c('GEOID'), with=F] %>% 
+  na.omit %>% 
+  .[, rand := rnorm(.N, mean=50, sd=10)] %>% 
+  Boruta(le ~ ., data = ., doTrace = 2, maxRuns = 500)
+print(boruta_mod)
+
+png(filename=file.path(viz.dir, 'boruta_imp_le.png'),
+    height=1200, width=2400, pointsize = 24)
+plot(boruta_mod, las = 2, cex.axis = 0.7)
+dev.off()
+
+boruta_mod <- mod_dt[, .(GEOID, item_short, measure, overall)] %>% 
+  dcast(GEOID+overall~item_short, value.var=c('measure')) %>% 
+  .[, -c('GEOID'), with=F] %>% 
+  na.omit %>% 
+  .[, rand := rnorm(.N, mean=50, sd=10)] %>% 
+  Boruta(overall ~ ., data = ., doTrace = 2, maxRuns = 500)
+print(boruta_mod)
+
+png(filename=file.path(viz.dir, 'boruta_imp.png'),
+                       height=1200, width=2400, pointsize = 24)
+plot(boruta_mod, las = 2, cex.axis = 0.7)
+dev.off()
+
+#run boruta using life expectancy as target
+boruta_mod <- mod_dt[, .(GEOID, item_short, rank, le)] %>% 
+  dcast(GEOID+le~item_short, value.var=c('rank')) %>% 
+  .[, -c('GEOID'), with=F] %>% 
+  na.omit %>% 
+  .[, rand := rnorm(.N, mean=50, sd=10)] %>% 
+  Boruta(le ~ ., data = ., doTrace = 2, maxRuns = 500)
+print(boruta_mod)
+
+png(filename=file.path(viz.dir, 'boruta_imp_rank_le.png'),
+    height=1200, width=2400, pointsize = 24)
+plot(boruta_mod, las = 2, cex.axis = 0.7)
+dev.off()
+
+boruta_mod <- mod_dt[, .(GEOID, item_short, rank, overall)] %>% 
+  dcast(GEOID+overall~item_short, value.var=c('rank')) %>% 
+  .[, -c('GEOID'), with=F] %>% 
+  na.omit %>% 
+  .[, rand := rnorm(.N, mean=50, sd=10)] %>% 
+  Boruta(overall ~ ., data = ., doTrace = 2, maxRuns = 500)
+print(boruta_mod)
+
+png(filename=file.path(viz.dir, 'boruta_imp_rank.png'),
+    height=1200, width=2400, pointsize = 24)
+plot(boruta_mod, las = 2, cex.axis = 0.7)
+dev.off()
+
+
+
+
+# fviz_pca_biplot(pca_mod,
+#                  #col.var = "contrib", # Color by the quality of representation
+#                 col.ind = 'rank',
+#                  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+#                  label='var',
+#                  repel = TRUE     # Avoid text overlapping
+# )
+
+#***********************************************************************************************************************
+
+# ---SCRAP -------------------------------------------------------------------------------------------------------------
+#model cluster #1
+#TODO write desc
+#run model
+mod1 <- glm(dropout_factor ~ item_fac:measure_shift_log, data=reg_dt[shift_type=='shift'], family='binomial')
+mod2 <- glm(dropout ~ item_fac:measure_shift_log, data=reg_dt[shift_type=='shift'], family='binomial')
+mod3 <- glm(dropin ~ item_fac:measure_shift_log, data=reg_dt[shift_type=='shift'], family='binomial')
+# mod4 <- glm(dropout_factor ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
+# mod5 <- glm(dropout ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
+# mod6 <- glm(dropin ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
+#table
+stargazer(mod1, mod2, mod3, #mod4, mod5, mod6,
           type='html') %>% 
   capture.output(file=file.path(out.dir, 'table_1.html'))
-plot_summs(mod1, mod2, mod3, mod4, mod5, mod6,
-           #plot.distributions = TRUE, inner_ci_level = .9,
-           model.names = c("drops vs shift", 
-                           "dropouts vs shift", 
-                           "dropins vs shift",
-                           'drops vs ratio',
-                           'dropouts vs ratio',
-                           'dropins vs ratio')
+# #plot coefficients
+# plot_summs(mod1, mod2, mod3, mod4, mod5, mod6,
+#            #plot.distributions = TRUE, inner_ci_level = .9,
+#            model.names = c("drops vs shift", 
+#                            "dropouts vs shift", 
+#                            "dropins vs shift",
+#                            'drops vs ratio',
+#                            'dropouts vs ratio',
+#                            'dropins vs ratio')
+# )
+# file.path(viz.dir, 'regression_1_coefplot.png') %>% ggsave(height=8, width=12)
+
+plot_summs(mod1, mod2, mod3,
+           model.names = c("drops vs shift",
+                           "dropouts vs shift",
+                           "dropins vs shift")
 )
 file.path(viz.dir, 'regression_1_coefplot.png') %>% ggsave(height=8, width=12)
 
-  plot_summs(mod1, mod2, mod3, 
-             model.names = c("drops vs shift", 
-                             "dropouts vs shift", 
-                             "dropins vs shift")
-  )
-  file.path(viz.dir, 'regression_1_coefplota.png') %>% ggsave(height=8, width=12)
+mod1 <- glm(dropout_factor ~ item_fac:measure_shift_scale, data=reg_dt[shift_type=='shift'], family='binomial')
+mod2 <- glm(dropout ~ item_fac:measure_shift_scale, data=reg_dt[shift_type=='shift'], family='binomial')
+mod3 <- glm(dropin ~ item_fac:measure_shift_scale, data=reg_dt[shift_type=='shift'], family='binomial')
+# mod4 <- glm(dropout_factor ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
+# mod5 <- glm(dropout ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
+# mod6 <- glm(dropin ~ item:measure_shift, data=reg_dt[shift_type=='ratio'], family='binomial')
+#table
+stargazer(mod1, mod2, mod3, #mod4, mod5, mod6,
+          type='html') %>% 
+  capture.output(file=file.path(out.dir, 'table_1scale.html'))
+# #plot coefficients
+# plot_summs(mod1, mod2, mod3, mod4, mod5, mod6,
+#            #plot.distributions = TRUE, inner_ci_level = .9,
+#            model.names = c("drops vs shift", 
+#                            "dropouts vs shift", 
+#                            "dropins vs shift",
+#                            'drops vs ratio',
+#                            'dropouts vs ratio',
+#                            'dropins vs ratio')
+# )
+# file.path(viz.dir, 'regression_1_coefplot.png') %>% ggsave(height=8, width=12)
+
+plot_summs(mod1, mod2, mod3,
+           model.names = c("drops vs shift scaled",
+                           "dropouts vs shift scaled",
+                           "dropins vs shift scaled")
+)
+file.path(viz.dir, 'regression_1scale_coefplot.png') %>% ggsave(height=8, width=12)
+
+# plot_summs(mod4, mod5, mod6, 
+#            model.names = c("drops vs ratio", 
+#                            "dropouts vs ratio", 
+#                            "dropins vs ratio")
+# )
+# file.path(viz.dir, 'regression_1_coefplotb.png') %>% ggsave(height=8, width=12)
+
+#model cluster #2
+#modelling the shift in rank vs the raw shift
+mod1 <- glm(dropout_factor ~ item_fac:rank_shift, data=reg_dt[shift_type=='shift'], family='binomial')
+mod2 <- glm(dropout ~ item_fac:rank_shift, data=reg_dt[shift_type=='shift'], family='binomial')
+mod3 <- glm(dropin ~ item_fac:rank_shift, data=reg_dt[shift_type=='shift'], family='binomial')
+#table 2
+stargazer(mod1, mod2, mod3,
+          type='html') %>% 
+  capture.output(file=file.path(out.dir, 'table_2.html'))
+
+plot_summs(mod1, mod2, mod3,
+           model.names = c("drops vs shift",
+                           "dropouts vs shift",
+                           "dropins vs shift")
+)
+file.path(viz.dir, 'regression_2_coefplot.png') %>% ggsave(height=8, width=12)
+
+ggplot(reg_dt, aes(x=measure_shift, y=item_short, fill = 0.5 - abs(0.5 - stat(ecdf)))) +
+  stat_density_ridges(geom = "density_ridges_gradient", calc_ecdf = TRUE) +
+  scale_fill_viridis_c(name = "Tail probability", direction = -1) +
+  theme_bw()
+
+file.path(viz.dir, 'shift_ridges.png') %>% ggsave(height=8, width=12)
+
+ggplot(reg_dt, aes(x=measure_shift_log, y=item_short, fill = 0.5 - abs(0.5 - stat(ecdf)))) +
+  stat_density_ridges(geom = "density_ridges_gradient", calc_ecdf = TRUE) +
+  scale_fill_viridis_c(name = "Tail probability", direction = -1) +
+  theme_bw()
+
+file.path(viz.dir, 'shift_ridges_log.png') %>% ggsave(height=8, width=12)
+
+ggplot(reg_dt, aes(x=measure_shift_scale, y=item_short, fill = 0.5 - abs(0.5 - stat(ecdf)))) +
+  stat_density_ridges(geom = "density_ridges_gradient", calc_ecdf = TRUE) +
+  scale_fill_viridis_c(name = "Tail probability", direction = -1) +
+  theme_bw()
+
+file.path(viz.dir, 'shift_ridges_scale.png') %>% ggsave(height=8, width=12)
+
+densityPlot <- function(x, dt=reg_dt, var='measure_shift',
+                        fill_var='theme') {
   
-  plot_summs(mod4, mod5, mod6, 
-             model.names = c("drops vs ratio", 
-                             "dropouts vs ratio", 
-                             "dropins vs ratio")
-  )
-  file.path(viz.dir, 'regression_1_coefplotb.png') %>% ggsave(height=8, width=12)
+  message('plotting ', x)
+  
+  plot <- 
+    ggplot(dt[item_short==x], aes_string(var, fill=fill_var)) +
+    geom_density(adjust = 1/5, alpha=.5) +
+    ggtitle(x) +
+    scale_fill_viridis_d() +
+    theme_bw()
+  
+}
+
+pdf(file.path(viz.dir, 'shift_densities.pdf'), height=8, width=12)
+lapply(unique(dt$item_short), densityPlot)
+dev.off()
+
+pdf(file.path(viz.dir, 'shift_densities_logged.pdf'), height=8, width=12)
+lapply(unique(dt$item_short), densityPlot, var='measure_shift_log')
+dev.off()
+
+pdf(file.path(viz.dir, 'shift_densities_scale.pdf'), height=8, width=12)
+lapply(unique(dt$item_short), densityPlot, var='measure_shift_scale')
+dev.off()
+
+pdf(file.path(viz.dir, 'measure_densities.pdf'), height=8, width=12)
+lapply(unique(dt$item_short)[-1], densityPlot, var='value', 
+       fill_var='variable',
+       dt=reg_dt[, .(GEOID, theme, item_short, measure, measure_v1)] %>% 
+         melt(id.vars=c('GEOID', 'theme', 'item_short'))
+)
+dev.off()
+
 
 mod2 <- glm(overall_shift ~ item:measure_shift, data=reg_dt, family='gaussian')
 stargazer(mod1, mod2, 
@@ -468,45 +1201,6 @@ stargazer(mod1, mod2,
           keep.stat="n", ci=TRUE, ci.level=0.90, single.row=TRUE) %>% 
   capture.output(file=file.path(out.dir, 'table_2.html'))
 
-mod1 <- glm(dropout_int ~ item:measure_new, data=reg_dt, family='binomial')
-mod2 <- glm(index_shift ~ item:measure_new, data=reg_dt, family='gaussian')
-mod3 <- glm(index_new ~ item:measure_new, data=reg_dt, family='gaussian')
-stargazer(mod1, mod2, mod3,
-          type='html',
-          title="Regression Results", dep.var.labels=c("Dropouts","Index Movement", 'New Index'), 
-          keep.stat="n", ci=TRUE, ci.level=0.90, single.row=TRUE) %>% 
-  capture.output(file=file.path(out.dir, 'table_3.html'))
-
-mod1 <- glm(impacted_new ~ item:measure_shift, data=reg_dt, family='binomial')
-mod2 <- glm(impacted_new ~ item:measure_new, data=reg_dt, family='binomial')
-mod3 <- glm(impacted_old ~ item:measure_old, data=reg_dt, family='binomial')
-stargazer(mod1, mod2, mod3,
-          type='html',
-          title="Regression Results", 
-          keep.stat="n", ci=TRUE, ci.level=0.90, single.row=TRUE) %>% 
-  capture.output(file=file.path(out.dir, 'table_4.html'))
-
-mod1 <- glm(impacted_new ~ item:measure_shift, data=reg_dt, family='binomial')
-stargazer(mod1, type='html') %>% 
-  capture.output(file=file.path(out.dir, 'table_5.html'))
-
-
-#save the plot
-file.path(viz.dir, 'measure_scatters.png') %>% ggsave(height=8, width=12)
-
-#
-ggplot(reg_dt, aes(x=index_shift, measure_shift, color=dropout) ) +
-  geom_point(position='jitter') +
-  #geom_hex(bins = 70) +
-  facet_wrap(~item) + 
-  scale_color_brewer('Dropouts', palette='Pastel1') +
-  theme_bw() 
-
-#save the plot
-file.path(viz.dir, 'measure_shift_scatters.png') %>% ggsave(height=8, width=12)
-#***********************************************************************************************************************
-
-# ---SCRAP -------------------------------------------------------------------------------------------------------------
 ##explore problems with wastewater data
 # cartographeR(dt=ranks_old$measure_raw, map_varname = 'rank_order', scale_type='cont',
 #              subset_var='item', subset_val='Wastewater Discharge')

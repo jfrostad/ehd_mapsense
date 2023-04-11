@@ -7,7 +7,75 @@
 
 # ----FUNCTIONS---------------------------------------------------------------------------------------------------------
 
-#pulled from COINr github
+##my custom functions##
+#make z scores that are loggable (>0) for geometric mean aggs
+n_zscore_log <- function (x, m_sd = c(0, 1), constant=NA) 
+{
+  stopifnot(is.numeric(x), is.numeric(m_sd), length(m_sd) == 
+              2, all(!is.na(m_sd)), m_sd[2] > 0)
+  
+  #calculate z score
+  xnew <- (x - mean(x, na.rm = TRUE))/stats::sd(x, na.rm = TRUE) * 
+    m_sd[2] + m_sd[1]
+  
+  #if not provided, shift by the smallest amount to get above zero
+  if(constant %>% is.na) constant <- abs(0 - min(x, na.rm=T)) + 0.001
+  
+  #shift above 0
+  xnew <- constant + xnew - min(xnew, na.rm=T)
+  
+}
+
+#make binned ranks (default=deciles)
+n_brank <- function (x, ties.method = "min", nranks=10) 
+{
+  stopifnot(is.numeric(x))
+  rx <- rank(x, ties.method = "min", na.last = "keep")
+  rx <- (rx / floor(sum(!is.na(rx))/nranks)) %>% ceiling
+  rx[which(rx>nranks)] <- nranks #cap the ranks at nranks (dont turn up to 11)
+  return(rx)
+}
+
+#make pranks that are loggable (shift 0s)
+n_prank_log <- function (x, ties.method = "min", constant=0.0001) 
+{
+  stopifnot(is.numeric(x))
+  rx <- rank(x, ties.method = "min", na.last = "keep")
+  (rx - 1)/(sum(!is.na(x)) - 1) + constant
+}
+
+#generate random noise into your indicators to simulate measurement error
+get_noisy_dt <- function(dt, noise_factor=.5, Nrep){
+  
+  # make list for sims
+  out <- vector(mode = "list", length = Nrep)
+  
+  for (irep in 1:Nrep){
+    
+    # make fresh copy of dt
+    dt_rep <- copy(dt)
+    
+    # vars for this level
+    col_names <- names(dt_rep)[-1]
+    # vector of noise: random number in [0,1] times 2, -1. This interprets NoiseFactor as
+    # a +/-% deviation.
+    dt_rep[, (col_names) := lapply(.SD, function(x) { 
+      ((runif(length(x))*2 - 1)*noise_factor*x)+x
+    }), .SDcols=col_names]
+    
+    out[[irep]] <- dt_rep
+    
+  }
+  
+  return(out)
+}
+
+#***********************************************************************************************************************
+
+# ----COINr FORK--------------------------------------------------------------------------------------------------------
+#pulled from COINr github and tweaked for my needs
+#TODO make pull req
+
 #' Sensitivity and uncertainty analysis of a coin
 #'
 #' This function performs global sensitivity and uncertainty analysis of a coin. You must specify which

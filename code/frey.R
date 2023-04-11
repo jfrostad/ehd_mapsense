@@ -51,7 +51,6 @@ pacman::p_load(readxl, snakecase, janitor, data.table, naniar, stringr, magrittr
                tigris, tidycensus, ggcorrplot,
                broom.mixed, ggstance, jtools, factoextra,
                COINr, randtoolbox, sensobol, #sens packages
-               #confoundr,
                stargazer,
                parallel, pbmcapply,
                cluster, ggdendro, #HCA packages
@@ -91,68 +90,6 @@ writeExcel <- function(x,row.names=FALSE,col.names=TRUE,...) {
 #label outliers statistically
 isOutlier <- function(x) {
   quantile(x, 0.25, na.rm=T) - 1.5 * IQR(x, na.rm=T) | x > quantile(x, 0.75, na.rm=T) + 1.5 * IQR(x, na.rm=T)
-}
-
-#make z scores that are loggable (>0) for geometric mean aggs
-n_zscore_log <- function (x, m_sd = c(0, 1), constant=NA) 
-{
-  stopifnot(is.numeric(x), is.numeric(m_sd), length(m_sd) == 
-              2, all(!is.na(m_sd)), m_sd[2] > 0)
-
-  #calculate z score
-  xnew <- (x - mean(x, na.rm = TRUE))/stats::sd(x, na.rm = TRUE) * 
-    m_sd[2] + m_sd[1]
-
-  #if not provided, shift by the smallest amount to get above zero
-  if(constant %>% is.na) constant <- abs(0 - min(x, na.rm=T)) + 0.001
-  
-  #shift above 0
-  xnew <- constant + xnew - min(xnew, na.rm=T)
-  
-}
-
-#make binned ranks (default=deciles)
-n_brank <- function (x, ties.method = "min", nranks=10) 
-{
-  stopifnot(is.numeric(x))
-  rx <- rank(x, ties.method = "min", na.last = "keep")
-  rx <- (rx / floor(sum(!is.na(rx))/nranks)) %>% ceiling
-  rx[which(rx>nranks)] <- nranks #cap the ranks at nranks (dont turn up to 11)
-  return(rx)
-}
-
-#make pranks that are loggable (shift 0s)
-n_prank_log <- function (x, ties.method = "min", constant=0.0001) 
-{
-  stopifnot(is.numeric(x))
-  rx <- rank(x, ties.method = "min", na.last = "keep")
-  (rx - 1)/(sum(!is.na(x)) - 1) + constant
-}
-
-#generate random noise into your indicators to simulate measurement error
-get_noisy_dt <- function(dt, noise_factor=.5, Nrep){
-  
-  # make list for sims
-  out <- vector(mode = "list", length = Nrep)
-  
-  for (irep in 1:Nrep){
-  
-    # make fresh copy of dt
-    dt_rep <- copy(dt)
-    
-    # vars for this level
-    col_names <- names(dt_rep)[-1]
-    # vector of noise: random number in [0,1] times 2, -1. This interprets NoiseFactor as
-    # a +/-% deviation.
-    dt_rep[, (col_names) := lapply(.SD, function(x) { 
-      ((runif(length(x))*2 - 1)*noise_factor*x)+x
-    }), .SDcols=col_names]
-    
-    out[[irep]] <- dt_rep
-    
-  }
-  
-  return(out)
 }
 
 #***********************************************************************************************************************
@@ -430,22 +367,22 @@ names(div_colors) <- dt[, unique(rank_shift) %>% sort]
 
 #create a manual discrete color scale for the continuous index and make sure the color scale legend has all integers
 cont_colors <- viridis::magma(n = 10)
-#update colors with allies scale
-# cont_colors <- c(
-#   rgb(248, 250, 251, maxColorValue = 255), # 1:     Red: 248, Green: 250, Blue: 251
-#   rgb(236, 242, 246, maxColorValue = 255), # 2:     Red: 236, Green: 242, Blue: 246
-#   rgb(220, 230, 239, maxColorValue = 255), # 3:     Red: 220, Green: 230, Blue: 239
-#   rgb(203, 218, 233, maxColorValue = 255), # 4:     Red: 203, Green: 218, Blue: 233
-#   rgb(194, 199, 223, maxColorValue = 255), # 5:     Red: 194, Green: 199, Blue: 223
-#   rgb(194, 178, 213, maxColorValue = 255), # 6:     Red: 194, Green: 178, Blue: 213
-#   rgb(192, 157, 203, maxColorValue = 255), # 7:     Red: 192, Green: 157, Blue: 203
-#   rgb(189, 132, 186, maxColorValue = 255), # 8:     Red: 189, Green: 132, Blue: 186
-#   rgb(161, 124, 177, maxColorValue = 255), # 9:     Red: 161, Green: 124, Blue: 177
-#   rgb(163, 124, 162, maxColorValue = 255) # 10:   Red: 163, Green: 124, Blue: 162
-# )
-
 names(cont_colors) <- 1:10
 
+#update colors with DOH scale
+doh_cont_colors <- c(
+  rgb(248, 250, 251, maxColorValue = 255), # 1:     Red: 248, Green: 250, Blue: 251
+  rgb(236, 242, 246, maxColorValue = 255), # 2:     Red: 236, Green: 242, Blue: 246
+  rgb(220, 230, 239, maxColorValue = 255), # 3:     Red: 220, Green: 230, Blue: 239
+  rgb(203, 218, 233, maxColorValue = 255), # 4:     Red: 203, Green: 218, Blue: 233
+  rgb(194, 199, 223, maxColorValue = 255), # 5:     Red: 194, Green: 199, Blue: 223
+  rgb(194, 178, 213, maxColorValue = 255), # 6:     Red: 194, Green: 178, Blue: 213
+  rgb(192, 157, 203, maxColorValue = 255), # 7:     Red: 192, Green: 157, Blue: 203
+  rgb(189, 132, 186, maxColorValue = 255), # 8:     Red: 189, Green: 132, Blue: 186
+  rgb(161, 124, 177, maxColorValue = 255), # 9:     Red: 161, Green: 124, Blue: 177
+  rgb(163, 124, 162, maxColorValue = 255) # 10:   Red: 163, Green: 124, Blue: 162
+)
+names(doh_cont_colors) <- 1:10
 
 #drop water codes with weird data from maps
 drop_geocodes <- c('53057990100' #san juan water area with lots of big changes
@@ -895,23 +832,14 @@ if(rerun_gsa) {
                             dset = "Aggregated", iCode = "ehd_rank", Nboot = 100, ncores = gsa_cores, sock=T)
   saveRDS(SA_res, file=file.path(scratch.dir, paste0('gsa_output_v', gsa_version, '.RDS')))
   
+  browser()
+  
 } else SA_res <- file.path(scratch.dir, paste0('gsa_output_v', gsa_version, '.RDS')) %>% readRDS
-
-browser()
-
 #***********************************************************************************************************************
 
 # ---GSA RESULTS--------------------------------------------------------------------------------------------------------
-#examine default plots
-# plot_sensitivity(SA_res, ptype = "box")
-# file.path(viz.dir, 'gsa_sensitivity_plot.png') %>% ggsave(height=8, width=12)
-plot_uncertainty(SA_res, 'RankStats')
-file.path(viz.dir, 'gsa_uncertainty_plot.png') %>% ggsave(height=8, width=12)
-plot_uncertainty(SA_res, 'RankStats',
-                 plot_units = dt[county_name=='King County', unique(GEOID)])
-file.path(viz.dir, 'gsa_uncertainty_plot_king.png') %>% ggsave(height=8, width=12)
-
-#map the uncertainty range
+#make some plot and stat DTs from the GSA outputs
+#for ranks
 rank_stats_dt <- SA_res$RankStats %>% 
   as.data.table %>%
   setnames('uCode', 'GEOID') %>% 
@@ -920,6 +848,7 @@ rank_stats_dt <- SA_res$RankStats %>%
   .[, deviation := Median-Nominal_rank] %>% 
   .[, level := 1] 
 
+#for binranks
 brank_stats_dt <- SA_res$BRankStats %>% 
   as.data.table %>% 
   .[, range := Q95-Q5] %>% 
@@ -929,7 +858,9 @@ brank_stats_dt <- SA_res$BRankStats %>%
   merge(., dt[level==1, .(GEOID, impacted_hierarchy, county_name, ruca_level, ruca_pop)], by='GEOID')
 
 #generate summary stats
+#do some birdwatchin
 rank_stats_dt[, weighted.mean(deviation %>% abs, ruca_pop)] #avg deviation in ranking
+rank_stats_dt[, median(range), by=ehd_rank][order(ehd_rank)] #avg deviation across bin groups from base EHD
 
 rank_stats_dt[, weighted.mean(deviation %>% abs, ruca_pop), by=ehd_rank][order(ehd_rank)] %>% 
   ggplot(., aes(ehd_rank, V1, fill=V1)) + 
@@ -941,8 +872,11 @@ rank_stats_dt[, weighted.mean(deviation %>% abs, ruca_pop), by=ehd_rank][order(e
 
 file.path(viz.dir, 'mean_rank_deviation_binned.png') %>% ggsave(height=8, width=12)
 
-rank_stats_dt[, median(range), by=ehd_rank][order(ehd_rank)]
+#***********************************************************************************************************************
 
+# ---GSA FIGURES--------------------------------------------------------------------------------------------------------
+#make plots for the manuscript
+# Figure 2a ----------------------------------------------------------
 #make some combined plots for figure 2
 #first make a general layout for this plot type
 lay <- rbind(c(2,2,1,1,1,1,1,1,1),
@@ -990,7 +924,7 @@ plot <- arrangeGrob(grobs=all_grobs, layout_matrix=lay,
 ggsave(plot=plot, filename=file.path(viz.dir, 'fig_2a.png'),
        width=12, height=8, units='in', dpi=900)
 
-#figure 2b
+# Figure 2b ----------------------------------------------------------
 #first make a histogram of county level uncertainty
 range_hist <-
   rank_stats_dt[, weighted.mean(range, ruca_pop), by=county_name][order(county_name)] %>% 
@@ -1029,7 +963,7 @@ plot <- arrangeGrob(grobs=all_grobs, layout_matrix=lay,
 ggsave(plot=plot, filename=file.path(viz.dir, 'fig_2b.png'),
        width=12, height=8, units='in', dpi=900)
 
-#figure 2c
+# Figure 2c ----------------------------------------------------------
 #make a biplot showing the uncertainty
 rank_stats_dt$ehd_bin <- cut(rank_stats_dt$ehd_rank, breaks = c(0,2,8,10), include.lowest = TRUE)
 bi_data <- bi_class(rank_stats_dt, x = ehd_bin, y = range, style = "quantile", dim = 3)
@@ -1058,7 +992,10 @@ cartographeR(dt=brank_stats_dt, map_varname = 'Accuracy', map_label = 'Accuracy 
              tag = 'gsa_results',
              scale_type='cont')
 
+# Figure 3 ----------------------------------------------------------
+
 #plot uncertainty against the OG ranking
+plot <-
 ggplot(rank_stats_dt, aes(x=Nominal_rank, range, color=impacted_hierarchy %>% as.factor) ) +
   geom_jitter(width=.5, height=.5) +
   scale_color_brewer('Impact Status', palette = 'Paired') +
@@ -1067,6 +1004,46 @@ ggplot(rank_stats_dt, aes(x=Nominal_rank, range, color=impacted_hierarchy %>% as
   theme_bw() 
 
 file.path(viz.dir, 'gsa_rank_range_scatters.png') %>% ggsave(height=8, width=12)
+
+plot <-
+  ggplot(rank_stats_dt, aes(x=Nominal_rank, y=range, fill=impacted_hierarchy %>% as.factor)) +
+  geom_hex(aes(alpha=log(..count..)), bins=50) +
+  #scale_fill_brewer('Impact Status', palette = 'Paired') +
+  #scale_fill_viridis() +
+  scale_fill_manual('Impact\nAgreement', values=viridis::turbo(10)[c(1,7,8,10)]) +
+  scale_x_continuous('Baseline EHD Ranking') +
+  scale_y_continuous('Rank Uncertainty') +
+  scale_alpha_continuous(guide='none', range=c(.5,1)) +
+  theme_minimal() 
+
+file.path(viz.dir, 'gsa_rank_range_hex_impacted.png') %>% ggsave(height=8, width=12)
+
+plot <-
+  ggplot(rank_stats_dt, aes(x=Nominal_rank, y=range, fill=Nominal_bin %>% as.factor)) +
+  geom_hex(aes(alpha=log(..count..)), bins=50) +
+  #scale_fill_brewer('Impact Status', palette = 'Paired') +
+  scale_fill_viridis_d("EHD \nDeciles", option='turbo') +
+  scale_x_continuous('Baseline EHD Ranking') +
+  scale_y_continuous('Rank Uncertainty') +
+  scale_alpha_continuous(guide='none', range=c(.5,1)) +
+  theme_minimal() 
+
+file.path(viz.dir, 'gsa_rank_range_hex.png') %>% ggsave(height=8, width=12)
+
+plot <-
+  ggplot(rank_stats_dt, aes(x=Nominal_rank, y=deviation, fill=Nominal_bin %>% as.factor)) +
+  geom_hex(aes(alpha=log(..count..)), bins=40) +
+  #scale_fill_brewer('Impact Status', palette = 'Paired') +
+  scale_fill_viridis_d("EHD \nDeciles", option='turbo') +
+  scale_x_continuous('Baseline EHD Ranking') +
+  scale_y_continuous('Average Deviation') +
+  scale_alpha_continuous(guide='none', range=c(.5,1)) +
+  theme_minimal() 
+
+
+file.path(viz.dir, 'gsa_rank_deviation_hex.png') %>% ggsave(height=8, width=12)
+
+# Figure 4 ----------------------------------------------------------
 
 # make stacked bar plot to show the first and total indices
 ggplot(SA_res$Sensitivity[!(sensitivity=='Sij' | parameters %like% 'Classification')], aes(y=original, x=parameters,
@@ -1153,6 +1130,8 @@ ggplot(plot_dt, aes(var1, var2, fill=original)) +
 
 file.path(viz.dir, 'gsa_acc_interactions_plot.png') %>% ggsave(height=8, width=12)
 
+# Figure 5 ----------------------------------------------------------
+
 #plot the MARCs by choice
 #TODO needs more work
 SA_res$diffs_dt[param!='Classification', .(MARC=mean(average_diff %>% abs)), by=.(param, sample)] %>% 
@@ -1179,7 +1158,15 @@ ggplot(aes(forcats::fct_reorder(sample, average_diff), average_diff, fill=param)
 
 file.path(viz.dir, 'marc_distributions.png') %>% ggsave(height=8, width=12)
 
-#do some birdwatchin
+# Figure 7 (SI) ----------------------------------------------------------
+#examine default plots
+# plot_sensitivity(SA_res, ptype = "box")
+# file.path(viz.dir, 'gsa_sensitivity_plot.png') %>% ggsave(height=8, width=12)
+plot_uncertainty(SA_res, 'RankStats')
+file.path(viz.dir, 'gsa_uncertainty_plot.png') %>% ggsave(height=8, width=12)
+plot_uncertainty(SA_res, 'RankStats',
+                 plot_units = dt[county_name=='King County', unique(GEOID)])
+file.path(viz.dir, 'gsa_uncertainty_plot_king.png') %>% ggsave(height=8, width=12)
 #***********************************************************************************************************************
  
 # ---PLOT---------------------------------------------------------------------------------------------------------------

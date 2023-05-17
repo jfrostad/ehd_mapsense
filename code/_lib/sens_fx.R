@@ -19,10 +19,11 @@ n_zscore_log <- function (x, m_sd = c(0, 1), constant=NA)
     m_sd[2] + m_sd[1]
   
   #if not provided, shift by the smallest amount to get above zero
-  if(constant %>% is.na) constant <- abs(0 - min(x, na.rm=T)) + 0.001
+  if(constant %>% is.na) constant <- abs(0 - min(xnew, na.rm=T)) + 0.001
   
   #shift above 0
   xnew <- constant + xnew - min(xnew, na.rm=T)
+  return(xnew)
   
 }
 
@@ -1908,15 +1909,18 @@ PCA. You can also try imputing data first to avoid this."))
       .[, variable := paste0('PC', (.I))] %>% 
       setnames('.', 'wt') 
     
-    preds <- 
+    all_preds <- 
     predict(PCAres, newdata=dat4PCA) %>% 
       .[,1:nrow(pca_kaiser)] %>%  #note here is where we could keep additional PCAs to permute the aggs
       as.data.table %>% 
       .[, id := .I] %>% 
       melt(id.vars='id') %>% 
       merge(pca_kaiser, by='variable') %>% 
-      .[, combined := sum(value*wt), by=id] %>% #from cutter 2003 - SoVI analysis
-      unique(by='id') %>% 
+      .[, combined := sum(value*wt), by=id] #from cutter 2003 - SoVI analysis
+    
+    #subset to just the combined prediction
+    preds <- 
+      unique(all_preds, by='id') %>% 
       .[, .(combined)] %>% 
       setnames('combined', coin$Meta$Lineage$Index %>% unique)
 
@@ -1928,10 +1932,33 @@ PCA. You can also try imputing data first to avoid this."))
       .[ehd_rank!=1, sum(ehd_rank)] %>% 
       sign
     
-    #invert if it has the wrong direction
+    #extract the importance for each PC that was retained
+    importance_dt <-
+    summary(PCAres)$importance[2,] %>% 
+      as.data.table %>% 
+      setnames('.', 'importance') %>% 
+      .[, i := .I] %>% 
+      .[, pc := paste0('PC', i)] %>% 
+      .[pc %in% unique(pca_kaiser$variable)] %>% 
+      .[, wt := importance/sum(importance)]
+
+    extractContrib <- function(i, mod) {
+      
+      mod %>% 
+        facto_summarize(element='var', result='contrib', axes=i) %>% 
+        as.data.table %>% 
+        .[, pc := paste0('PC',i)]
+    
+    }
+
+    contrib_dt <- lapply(unique(importance_dt$i), extractContrib, mod=PCAres) %>% 
+      rbindlist %>% 
+      merge(importance_dt, by='pc')
+
+    #invert if it has the opposite direction
     preds[, (coin$Meta$Lineage$Index %>% unique) := get(coin$Meta$Lineage$Index %>% unique)*sign]
     
-    list(wts = wts, PCAres = PCAres, iCodes = names(iData_), preds=preds)
+    list(wts = wts, PCAres = PCAres, iCodes = names(iData_), preds=preds, all_preds=all_preds, contrib=contrib_dt)
   }
   
   # We need to know the codes of the inds/aggs to get weights from

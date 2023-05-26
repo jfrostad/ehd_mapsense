@@ -49,7 +49,7 @@ pacman::p_load(readxl, snakecase, janitor, data.table, naniar, stringr, magrittr
                ggtern, ggplot2, ggpubr, ggridges, ggrepel, ggdist, grid, gridExtra, RColorBrewer, #viz pkgs
                sf, viridis, farver, reldist, ggnewscale, ggallin, biscale, cowplot,
                tigris, tidycensus, ggcorrplot,
-               broom.mixed, ggstance, jtools, factoextra,
+               broom.mixed, ggstance, jtools, factoextra, scam,
                COINr, randtoolbox, sensobol, #sens packages
                stargazer,
                parallel, pbmcapply,
@@ -583,7 +583,7 @@ plot_dt <- coin_results_dt[, .(uCode, ehd_rank)] %>%
   .[, impacted := 0] %>% 
   .[, zimpacted := 0] %>%
   .[coin_brank>8, impacted := 1] %>% 
-  .[coin_zrank>quantile(coin_zrank, p=.8), zimpacted:=1] %>% 
+  .[coin_zrank>quantile(coin_zrank, p=zscore_p80), zimpacted:=1] %>% 
   .[, diff := coin_brank - rank] %>% 
   .[, class_diff := coin_brank - coin_int_rank] %>% 
   .[, impacted_diff := impacted==zimpacted] %>% 
@@ -1329,12 +1329,19 @@ cartographeR(dt=dt, map_varname = 'ruca_level', map_label = 'RUCA Classification
 ##transformations##
 #setup some data with different types of transformation
 #build coins
-coin_zscore <- Normalise(coin, dset = "Treated",
-                         global_specs=list(f_n='n_zscore_log'))
-coin_minmax <- Normalise(coin, dset = "Treated",
-                       global_specs=list(f_n='n_minmax', f_n_para = list(c(0.001,10))))
-coin_prank <- Normalise(coin, dset = "Treated",
-                       global_specs=list(f_n='n_prank_log'))
+coin_zscore <- Treat(coin, dset = "Raw")
+# coin_zscore <- Normalise(coin_zscore, dset = "Treated",
+#                          global_specs=list(f_n='n_zscore'), f_n_para = list(m_sd=c(5,1)))
+
+coin_zscore <- Normalise(coin_zscore, dset = "Treated",
+          global_specs = list(f_n = "n_zscore",
+                              f_n_para = list(c(5,1))))
+
+coin_minmax <- Treat(coin, dset = "Raw")
+coin_minmax <- Normalise(coin_minmax, dset = "Treated",
+                         global_specs=list(f_n='n_minmax', f_n_para = list(c(0.001,10))))
+coin_prank <- Normalise(coin, dset = "Raw",
+                        global_specs=list(f_n='n_prank_log'))
 
 #aggregate using base function to compare to our results
 coin_minmax <- Aggregate(coin_minmax, dset = "Normalised", 
@@ -1342,6 +1349,13 @@ coin_minmax <- Aggregate(coin_minmax, dset = "Normalised",
                          flatten_hierarchy = F,
                          #note that we take the arith mean until the last aggregation, where we multiply for risk score
                          f_ag = c("a_amean", "a_amean", "prod")) 
+
+coin_zscore <- Aggregate(coin_zscore, dset = "Normalised", 
+                         w='Original',
+                         flatten_hierarchy = F,
+                         #note that we take the arith mean until the last aggregation, where we multiply for risk score
+                         f_ag = c("a_amean", "a_amean", "prod")) 
+
 
 
 #prep a theme dt for merging to the collapsed item short for labelling and categorization
@@ -1365,41 +1379,142 @@ prepFx <- function(obj, label) {
 }
 
 #merge all types together
-trans_dt <- list(
-  prepFx(coin$Data$Raw, 'raw'),
-  prepFx(coin$Data$Normalised, 'decile'),
-  prepFx(coin_prank$Data$Normalised, 'centile'),
-  prepFx(coin_zscore$Data$Normalised, 'zscore'),
-  prepFx(coin_minmax$Data$Normalised, 'minmax')
-) %>% 
-  rbindlist %>% 
-  merge(theme_labels_dt, by='indicator') %>% 
-  merge(le_reg_dt[, .(uCode=GEOID, cjest_le, tract_le)], by='uCode', all.x=T) 
+# trans_dt <- list(
+#   prepFx(coin$Data$Raw, 'raw'),
+#   prepFx(coin$Data$Normalised, 'decile'),
+#   prepFx(coin_prank$Data$Normalised, 'centile'),
+#   prepFx(coin_zscore$Data$Normalised, 'zscore'),
+#   prepFx(coin_minmax$Data$Normalised, 'minmax')
+# ) %>%   
+#   rbindlist %>% 
+#   merge(theme_labels_dt, by='indicator')
+
+#merge all types together
+trans_dt <- prepFx(coin$Data$Raw, 'raw') %>% 
+  .[, type := NULL] %>% 
+  .[, minmax := n_minmax(value, c(0,10)), by=indicator] %>% 
+  .[, centile := n_prank(value)*10, by=indicator] %>% 
+  .[, decile := n_brank(value), by=indicator] %>% 
+  .[, zscore5 := n_zscore(value, m_sd=c(5,1)), by=indicator] %>% 
+  .[, zscore := n_zscore(value), by=indicator] %>% 
+  setnames('value', 'raw') %>% 
+  melt(id.var=c('uCode', 'indicator'), value.name='value', variable.name='type') %>% 
+  merge(theme_labels_dt, by='indicator')
+
 
 #scale centile by 10 so it's easier to plot in the same space
-trans_dt[type=='centile', value := value*10]
+#trans_dt[type=='centile', value := value*10]
+#trans_dt[type=='zscore', value := value %>% n_minmax(l_u=c(0.001, 10))] #also scale the Zs
 
 #make a more readable label
 trans_dt[, indicator_label := str_replace_all(indicator, '_', '\n')]
 
+#plot the raw data distributions
+ggplot(trans_dt[type=='raw'], aes(value, fill=theme)) +
+  geom_density(alpha=.5) +
+  scale_fill_manual('Themes', values=viridis::turbo(10)[c(1,2,7,10)]) +
+  scale_y_continuous('') +
+  scale_x_continuous('') +
+  facet_wrap(~indicator_label, scales = 'free') +
+  theme_minimal()
+file.path(viz.dir, 'raw_distributions.png') %>% ggsave(height=8, width=12)
+
+themDist <- function(dt, this_theme) {
+  
+  plot <-
+    ggplot(dt[theme==this_theme & type %in% c('minmax', 'zscore', 'centile', 'decile')], 
+           aes(value, fill=type)) +
+    geom_density(alpha=.5) +
+    scale_fill_viridis_d('Transformations', option='magma') +
+    scale_y_sqrt('') +
+    scale_x_continuous('') +
+    facet_wrap(~indicator_label) +
+    theme_minimal()
+  
+  plot
+  
+}
+
+pdf(file.path(viz.dir, 'trans_distributions.pdf'))
+lapply(unique(trans_dt$theme), themDist, dt=trans_dt)
+dev.off()
+
+ggplot(trans_dt[!(type=='raw')], aes(value, fill=type)) +
+  geom_density(alpha=.5) +
+  scale_fill_manual('Themes', values=viridis::turbo(10)[c(1,2,7,10)]) +
+  scale_y_continuous('') +
+  scale_x_continuous('', limits=c(0,10)) +
+  facet_wrap(~indicator_label, scales='free') +
+  theme_minimal()
+file.path(viz.dir, 'trans_distributions.png') %>% ggsave(height=8, width=12)
+
+#***********************************************************************************************************************
+
+# ---COMPRESSION--------------------------------------------------------------------------------------------------------
 #make a wide version too to calc the residuals
+zscore_p80 <-  0.8416 #value of zscore for 80th pctile
 trans_wide_dt <- dcast(trans_dt,
                        ...~type, 
                        value.var='value') %>% 
-  merge(coin_alt2$Data$Aggregated %>% 
-          as.data.table %>% 
-          .[, .(uCode, minmax_rank=n_prank(ehd_rank))], by='uCode') %>% 
-  merge(coin$Data$Aggregated %>% 
-          as.data.table %>% 
-          .[, .(uCode, ehd_rank=n_prank(ehd_rank))], by='uCode') %>% 
-  .[, rank_diff := ehd_rank-minmax_rank] %>% 
-  .[, minmax_med := quantile(minmax, p=.5, na.rm=T), by=indicator] %>% 
-  .[, minmax_p25 := quantile(minmax, p=.25, na.rm=T), by=indicator] %>% 
-  .[, minmax_p75 := quantile(minmax, p=.75, na.rm=T), by=indicator]
+  #.[, zz_rank := n_zscore(zscore_rank)] %>% 
+  #.[, ze_rank := n_zscore(ehd_rank)] %>% 
+  .[, cent_zscore := n_zscore(centile), by=indicator] %>% 
+  .[, z_med := quantile(zscore, p=.5, na.rm=T), by=indicator] %>% 
+  .[, z_p25 := quantile(zscore, p=.25, na.rm=T), by=indicator] %>% 
+  .[, z_p75 := quantile(zscore, p=.75, na.rm=T), by=indicator] %>% 
+  .[, GEOID := uCode] %>% 
+  .[, level :=1]
+
+agg_dt <-
+merge(coin_zscore$Data$Aggregated %>% 
+       as.data.table %>% 
+       .[, .(uCode, zscore=n_prank(ehd_rank) %>% n_zscore, theme='EHD: ', indicator='composite')],
+     coin$Data$Aggregated %>% 
+       as.data.table %>% 
+       .[, .(uCode, centile=n_prank(ehd_rank) %>% n_zscore, theme='EHD: ', indicator='composite')],
+     by=c('uCode', 'theme', 'indicator')
+     ) %>% 
+  .[, rank_diff := centile-zscore] %>% 
+  .[, classification := 'Unimpacted'] %>% 
+  .[centile < zscore_p80 & zscore > zscore_p80, classification := 'Impacted (Z-score)'] %>% 
+  .[centile > zscore_p80 & zscore < zscore_p80, classification := 'Impacted (EHD)'] %>% 
+  .[centile > zscore_p80 & zscore > zscore_p80, classification := 'Impacted (Both)'] %>% 
+  .[]
+
+#find cases and label
+#find one each of
+#geoid that is not impacted on ehd and impacted on minmax
+agg_dt[rank_diff==agg_dt[class%like%'Z-score', min(rank_diff)], case := 1]
+#geoid that is impacted on ehd and not impacted on minmax
+case_dt[rank_diff==case_dt[class%like%'HED', max(rank_diff)], case := 2]
+
+#keep only cases
+case_dt <- na.omit(trans_wide_dt, cols='case')  %>% 
+  .[, level:=1] %>% 
+  .[, GEOID := uCode]
+  
+
+#fix theme names
+trans_wide_dt[theme=='Environmental Effects', theme_short := 'env fx:']
+trans_wide_dt[theme=='Environmental Exposures', theme_short := 'env exp: ']
+trans_wide_dt[theme=='Socioeconomic Factors', theme_short := 'socio: ']
+trans_wide_dt[theme=='Sensitive Populations', theme_short := 'sensitivity: ']
+trans_wide_dt[, ind := paste0(theme_short, indicator %>% str_replace_all('_', ' '))]
+
 
 #calculate the residuals by GEOID
 trans_wide_dt[, minmax_resid := centile-minmax]
 trans_wide_dt[, zscore_resid := centile-zscore]
+
+#plot the raw data distributions
+ggplot(trans_wide_dt, aes(raw, fill=classification)) +
+  geom_density(alpha=.5) +
+  scale_fill_manual('Impact Classification', values=viridis::turbo(10)[c(7,8,10,2)]) +
+  scale_y_continuous('') +
+  scale_x_continuous('') +
+  facet_wrap(~indicator_label, scales = 'free') +
+  theme_minimal()
+file.path(viz.dir, 'comparing_distributions.png') %>% ggsave(height=8, width=12)
 
 #collapse the residuals to GEOD
 resid_dt <- trans_wide_dt %>% 
@@ -1410,15 +1525,21 @@ resid_dt <- trans_wide_dt %>%
   .[, GEOID := uCode] %>% 
   merge(rank_stats_dt[, .(GEOID, Nominal_rank, ehd_rank, impacted_hierarchy)], by='GEOID')
 
-#graph aggregated PCA at tract level
+#graph residuals at tract level
 cartographeR(dt=resid_dt, map_varname = 'minmax_resid', map_label = 'Transformation Residuals',
              map_title = '',
              scale_type='cont')
 
-#graph aggregated PCA at tract level
+#graph difference in rank at tract level
 cartographeR(dt=resid_dt, map_varname = 'rank_diff', map_label = 'Change between base/minmax',
              map_title = '',
              scale_type='cont_grad')
+
+#graph difference in rank at tract level
+cartographeR(dt=trans_wide_dt[indicator%like%'death'], map_varname = 'classification', 
+             map_label = 'Change between base/minmax',
+             map_title = '',
+             scale_type='class')
 
 resid_dt$ehd_bin <- cut(resid_dt$ehd_rank, breaks = c(0,2,8,10), include.lowest = TRUE)
 bi_data <- bi_class(resid_dt, x = ehd_bin, y = avg_zscore_resid, style = "quantile", dim = 3)
@@ -1445,42 +1566,128 @@ file.path(viz.dir, 'resid_bimap.png') %>% ggsave(finalPlot, height=8, width=12)
 resid_ids <- bi_data[bi_class=='2-3', unique(GEOID)]
 trans_wide_dt[uCode%in%resid_ids]
 
-trans_wide_dt[uCode==53047940200 & !is.na(centile)] %>% 
-  .[, .(x=fct_reorder(indicator,minmax), theme, raw, value1=centile, value2=minmax, 
-        p25=minmax_p25, med=minmax_med, p75=minmax_p75,
-        zscore, zscore_resid, minmax_rank, ehd_rank)] %>% 
-  ggplot(aes(x=x)) +
-  geom_point( aes(x=x, y=med), color='black', size=2, shape=3 ) +
-  geom_segment( aes(x=x, xend=x, y=p25, yend=p75), color='grey') +
-  geom_segment( aes(x=x, xend=x, y=value1, yend=value2, color=theme)) +
-  geom_point( aes(x=x, y=value1), color=rgb(0.2,0.7,0.1,0.5), size=3 ) +
-  geom_point( aes(x=x, y=value2), color=rgb(0.7,0.2,0.1,0.5), size=3 ) +
+
+#graph difference in rank at tract level
+  case_map <- 
+  cartographeR(dt=case_dt, map_varname = 'case', map_label = 'Case studies',
+               map_title = '',
+               scale_type='cont_vir',
+               get_plot = T)
+
+casePlot <- function(this_case, dt)  {
+  case_dt[case %in% this_case & !is.na(centile)] %>% 
+    .[, .(uCode, case, x=fct_reorder(str_replace_all(indicator, '_', ' '), centile, .fun=mean), 
+          theme, raw, value1_rel=abs(centile-.5), value2_rel=abs(minmax-median(minmax, na.rm=T)), 
+          value1=centile, value2=minmax, 
+          p25=minmax_p25, med=minmax_med, p75=minmax_p75,
+          zscore, zscore_resid, minmax_rank, ehd_rank, zscore_rank)] %>% 
+    ggplot(aes(x=x)) +
+    geom_point( aes(x=x, y=med), color='#ff7f00', size=2, shape=3 ) +
+    geom_segment( aes(x=x, xend=x, y=p25, yend=p75), color='#ff7f00') +
+    geom_segment( aes(x=x, xend=x, y=med, yend=value2), color='#ff7f00', linetype='dotted') +
+    #geom_point( aes(x=x, y=5), color='#984ea3', size=2, shape=3 ) +
+    #geom_segment( aes(x=x, xend=x, y=5, yend=value1), color='#984ea3') +
+    #geom_segment( aes(x=x, xend=x, y=value1, yend=value2, color=theme)) +
+    geom_hline(aes(yintercept=ehd_rank*10), color='#984ea3') +
+    #geom_hline(aes(yintercept=zscore_rank*10), color='#e41a1c') +
+    geom_hline(aes(yintercept=minmax_rank*10), color='#ff7f00') +
+    geom_hline(aes(yintercept=8), color='grey', linetype='dotted') +
+    geom_point( aes(x=x, y=value1, size=value1_rel), color='#984ea3', alpha=.6) +
+    geom_point( aes(x=x, y=value2, size=value2_rel), color='#ff7f00', alpha=.6) +
+    #geom_point( aes(x=x, y=zscore), color='#e41a1c', size=3, alpha=.6) +
+    scale_color_manual('Themes', values=viridis::turbo(10)[c(1,2,7,10)]) +
+    scale_y_continuous(limits=c(0,10)) +
+    coord_flip()+
+    facet_wrap(~case, ncol=1) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+    ) +
+    ggtitle('Scaling Compression Effects') +
+    xlab("") +
+    ylab("Local Zscore (Orange) vs. Local Centile (Purple)")
+}
+
+
+pdf(file.path(viz.dir, 'scaling_compression_effect.pdf'))
+lapply(1:4, casePlot, dt=case_dt)
+dev.off()
+
+file.path(viz.dir, 'scaling_compression_effect.png') %>% ggsave(height=8, width=12)
+
+
+#***********************************************************************************************************************
+
+# ---ZSCORES------------------------------------------------------------------------------------------------------------
+#move the caseplot into zscore space
+casePlot2 <- function(this_case, dt)  {
+  case_dt[case %in% this_case & !is.na(centile)] %>% 
+    .[, .(uCode, case, x=ind, z_med, 
+          theme, raw, 
+          #value1_rel=abs(centile-.5), value2_rel=abs(minmax-median(minmax, na.rm=T)), 
+          value1=cent_zscore, value2=zscore, 
+          p25=z_p25, med=z_med, p75=z_p75,
+          zscore, zscore_resid, minmax_rank, ehd_rank, zscore_rank, zz_rank, ze_rank)] %>% 
+    ggplot(aes(x=x)) +
+    geom_point( aes(x=x, y=med), color='#ff7f00', size=2, shape=3 ) +
+    geom_segment( aes(x=x, xend=x, y=p25, yend=p75), color='#ff7f00') +
+    geom_segment( aes(x=x, xend=x, y=med, yend=value2), color='#ff7f00', linetype='dotted') +
+    #geom_point( aes(x=x, y=5), color='#984ea3', size=2, shape=3 ) +
+    #geom_segment( aes(x=x, xend=x, y=5, yend=value1), color='#984ea3') +
+    #geom_segment( aes(x=x, xend=x, y=value1, yend=value2, color=theme)) +
+    #geom_hline(aes(yintercept=ze_rank), color='#984ea3') +
+    #geom_hline(aes(yintercept=zscore_rank*10), color='#e41a1c') +
+    #geom_hline(aes(yintercept=zz_rank), color='#ff7f00') +
+    geom_hline(aes(yintercept=0), color='black') +
+    geom_hline(aes(yintercept=zscore_p80), color='grey', linetype='dashed') +
+    geom_point( aes(x=x, y=value1), color='#984ea3', alpha=.6, size=3) +
+    geom_point( aes(x=x, y=value2), color='#ff7f00', alpha=.6, size=3) +
+    #geom_point( aes(x=x, y=zscore), color='#e41a1c', size=3, alpha=.6) +
+    scale_color_manual('Themes', values=viridis::turbo(10)[c(1,2,7,10)]) +
+    scale_y_continuous(limits=c(-5,5)) +
+    coord_flip()+
+    facet_wrap(~case, ncol=1) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+    ) +
+    ggtitle('Scaling Compression Effects') +
+    xlab("") +
+    ylab("Local z-score of value (Orange) vs. Local z-score of centile (Purple)")
+}
+
+casePlot2(c(2,4), case_dt)
+file.path(viz.dir, 'scaling_compression_effect_zspace.png') %>% ggsave(height=8, width=12)
+
+case_dt[case %in% c(2,4) & !is.na(centile)] %>% 
+  .[, .(uCode, case, x=indicator_label, z_med, 
+        theme, raw, 
+        #value1_rel=abs(centile-.5), value2_rel=abs(minmax-median(minmax, na.rm=T)), 
+        value1=cent_zscore, value2=zscore, 
+        p25=z_p25, med=z_med, p75=z_p75,
+        zscore, zscore_resid, minmax_rank, ehd_rank, zscore_rank)] %>% 
+  ggplot(aes(x=value1, y=value2, color=theme, label=x)) +
+  geom_point(size=2) +
+  #geom_text_repel() +
+  geom_hline(aes(yintercept=ehd_rank*10), color='#984ea3') +
+  #geom_hline(aes(yintercept=zscore_rank*10), color='#e41a1c') +
+  geom_hline(aes(yintercept=minmax_rank*10), color='#ff7f00') +
   scale_color_manual('Themes', values=viridis::turbo(10)[c(1,2,7,10)]) +
+  scale_x_continuous(limits=c(0,10)) +
+  scale_y_continuous(limits=c(0,10)) +
   coord_flip()+
+  facet_wrap(~case, nrow=1) +
   theme_minimal() +
   theme(
     legend.position = "none",
   ) +
-  ggtitle('Scaling Compression Effects') +
-  xlab("") +
-  ylab("Local Minmax (Red) vs. Local Centile (Green)\nMinmax IQR (Grey)")
+  ggtitle('Scaling Compression Effects')
 
-file.path(viz.dir, 'scaling_compression_effect.png') %>% ggsave(height=8, width=12)
+file.path(viz.dir, 'scaling_compression_effect_zspace_scatter.png') %>% ggsave(height=8, width=12)
 
-trans_wide_dt %>%
-  ggplot( aes(y=indicator, x=minmax,  fill=theme)) +
-  geom_density_ridges(alpha=0.6, stat="binline", bins=20) +
-  theme_ridges() +
-  theme(
-    legend.position="none",
-    panel.spacing = unit(0.1, "lines"),
-    strip.text.x = element_text(size = 8)
-  ) +
-  xlab("") +
-  ylab("Assigned Probability (%)")
 
-plot <-
-  ggplot(resid_dt, aes(x=Nominal_rank, y=avg_minmax_resid, fill=impacted_hierarchy %>% as.factor)) +
+#look at the relationship between the residuals and ehd score
+ggplot(resid_dt, aes(x=Nominal_rank, y=avg_zscore_resid, fill=impacted_hierarchy %>% as.factor)) +
   geom_hex(aes(alpha=log(..count..)), bins=50) +
   #scale_fill_brewer('Impact Status', palette = 'Paired') +
   #scale_fill_viridis() +
@@ -1493,7 +1700,7 @@ plot <-
 file.path(viz.dir, 'gsa_rank_range_hex_impacted.png') %>% ggsave(height=8, width=12)
 
 #plot residuals vs ehd score
-ggplot(trans_wide_dt, aes(centile, minmax, fill=theme)) +
+ggplot(trans_wide_dt, aes(centile, zscore, fill=theme)) +
   geom_hex(aes(alpha=log(..count..)), bins=150) +
   #geom_point(alpha=.6) +
   scale_fill_manual('Themes', values=viridis::turbo(10)[c(1,2,7,10)]) +
@@ -1509,21 +1716,42 @@ file.path(viz.dir, 'trans_scatters.png') %>% ggsave(height=8, width=12)
 
 #***********************************************************************************************************************
 
+# ---PM2.5--------------------------------------------------------------------------------------------------------------
+##examine PM2.5 in risk space##
+pm_brt_dt <- file.path(data.dir, 'cvd_ihd.csv') %>% fread
+pm_dt <- dt[level==3 & item %like% 'PM 2.5 Concentration', .(GEOID, item, item_short, measure, measure_v1, cjest_le)] %>% 
+  copy %>% 
+  .[, exposure := measure_v1]
+
+#merge on the CVD RR values
+pm_dt <- pm_brt_dt[pm_dt, on=.(exposure), roll='nearest']
+
+trans_dt <- list(trans_dt,
+                 pm_dt[, .(indicator='pm25_concentration', value=mean, type='rr', uCode=GEOID, cjest_le)]) %>% 
+  rbindlist(fill=T, use.names=T)
+
+#***********************************************************************************************************************
+
 # ---PCA----------------------------------------------------------------------------------------------------------------
 ##pca##
 #also add on the PCA + individual raw data
-pc_dt <- get_PCA(coin_alt, dset='Normalised', by_groups=F, out2='preds', imputed=T) %>% 
+pc_dt <- get_PCA(coin_minmax, dset='Normalised', by_groups=F, out2='preds', imputed=T) %>% 
   cbind(coin$Data$Raw, .) %>% 
   setnames(c('uCode', 'ehd_rank'), c('GEOID', 'ehd_pc')) %>% 
-  merge(., le_reg_dt[, .(GEOID, cjest_le, tract_le)], by='GEOID', all.x=T) %>% 
   .[, level := 1]
 
 #extract the PCA model info as well for diagnostic plotting
-pc_mod <- get_PCA(coin_alt, dset='Normalised', by_groups=F, out2='mod', imputed=T)
+pc_mod <- get_PCA(coin_minmax, dset='Normalised', by_groups=F, out2='mod', imputed=T)
 pc_dt <- pc_mod$PCAresults$All$all_preds %>%
   .[, .(variable, id, value, combined)] %>% 
   dcast(...~variable, id.var='id', value.var='value') %>% 
-  cbind(pc_dt)
+  cbind(pc_dt) %>% 
+  merge(dt[level==1, .(GEOID, overall=rank, ruca_pop, county_name)], by='GEOID')
+
+pc_dt[, pca_deciles := n_brank(combined)]
+pc_dt[, diff := overall-pca_deciles]
+pc_dt[diff<(-5), diff := -5]
+pc_dt[diff>5, diff := 5]
 
 cartographeR(dt=pc_dt, map_varname = 'PC1', map_label = 'PC1',
              map_title = '',
@@ -1547,14 +1775,16 @@ pc_mod$PCAresults$All$contrib %>%
   theme_minimal()
 file.path(viz.dir, 'pca_contrib.png') %>% ggsave(height=8, width=12)
 
-
 fviz_pca_var(pc_mod$PCAresults$All$PCAres,
              col.var = "contrib", # Color by the quality of representation
              gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
              repel = TRUE     # Avoid text overlapping
 )   + ggtitle(paste0('PCA Loadings'))
+file.path(viz.dir, 'pca_biplot.png') %>% ggsave(height=8, width=12)
 
+plot <- 
 fviz_pca_ind(pc_mod$PCAresults$All$PCAres,
+             axes=c(1,2),
              pointshape = 19,
              label='none',
              col.var='black',
@@ -1562,11 +1792,28 @@ fviz_pca_ind(pc_mod$PCAresults$All$PCAres,
              repel = TRUE     # Avoid text overlapping
 ) +
   ggtitle('PCA Individuals') +
+  #geom_hex(data=dt[level==3 & item %like% 'Death'], aes(fill=impacted_hierarchy, alpha=log(..count..)), bins=35) +
   scale_color_manual('', values=viridis::turbo(10)[c(2,7,8,10)]) +
-  #scale_color_brewer('Impact Status', palette = 'Paired') +
   theme_minimal()
-
 file.path(viz.dir, 'pca_impacted_biplot.png') %>% ggsave(height=8, width=12)
+
+plot$data %>% 
+  na.omit() %>% 
+ggplot(aes(x=x, y=y, fill=Groups)) +
+   ggtitle('PCA Individuals') +
+   geom_hex(aes(alpha=log(..count..)), bins=60) +
+   geom_vline(xintercept=0) +
+   geom_hline(yintercept = 0) +
+   scale_fill_manual('', values=viridis::turbo(10)[c(2,7,8,10)]) +
+   scale_alpha_continuous(guide='none', range=c(.6,1)) +
+   scale_x_continuous('PC1', limits=c(-6, 6)) +
+   scale_y_continuous('PC2', c(-6, 6)) +
+   theme_minimal()
+
+file.path(viz.dir, 'pca_impacted_biplot_hex.png') %>% ggsave(height=8, width=12)
+
+#see classification percentage
+plot$data %>% as.data.table %>% .[, sum(y>=0&x>=0)/.N, by=Groups]
 
 fviz_pca_ind(pc_mod$PCAresults$All$PCAres,
              pointshape = 19,
@@ -1576,15 +1823,52 @@ fviz_pca_ind(pc_mod$PCAresults$All$PCAres,
 ) +
   ggtitle('PCA Individuals') +
   scale_color_viridis_c('Life Expectancy', option='viridis', direction=-1) +
-  #scale_color_brewer('Impact Status', palette = 'Paired') +
+  scale_fill_viridis()+
   theme_minimal()
 
 file.path(viz.dir, 'pca_impacted_le.png') %>% ggsave(height=8, width=12)
 
 #graph aggregated PCA at tract level
-cartographeR(dt=pc_dt, map_varname = 'ehd_pc', map_label = 'Tract Level PCA',
+cartographeR(dt=pc_dt, map_varname = 'ehd_pc', map_label = 'Combined\nPCA',
              map_title = '',
              scale_type='cont')
+
+#first make a histogram of county level differences
+diff_hist <-
+  pc_dt[, weighted.mean(diff, ruca_pop), by=county_name][order(county_name)] %>% 
+  .[, county_short := str_remove(county_name, ' County')] %>% 
+  ggplot(., aes(forcats::fct_reorder(county_short %>% as.factor, V1), V1, fill=V1)) + 
+  geom_bar(stat='identity') + 
+  scale_x_discrete('') +
+  scale_y_continuous('Average Difference in Deciles') + 
+  scale_fill_gradient2(guide='none', na.value = "grey75", high=muted('red'), low=muted('blue')) +
+  coord_flip() +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 35, vjust = 0.5, hjust=1))
+
+file.path(viz.dir, 'pca_mean_difference_county.png') %>% ggsave(height=8, width=12)
+
+#then map the tract level deviations
+diff_map <-
+  cartographeR(dt=pc_dt, map_varname = 'diff', map_label = 'Difference',
+               map_title = '',
+               scale_type='div_man', scale_vals = div_colors,
+               get_plot=T)
+
+all_grobs <- list(diff_map+
+                    theme(plot.margin = unit(c(0,0,0,-1), units = "cm"),
+                          legend.position = "none"), 
+                  diff_hist)
+
+
+plot <- arrangeGrob(grobs=all_grobs, layout_matrix=lay, 
+                    top=textGrob("EHD Index Agreement with PCA Index", 
+                                 gp = gpar(fontsize=17))
+) %>% 
+  grid.arrange
+
+ggsave(plot=plot, filename=file.path(viz.dir, 'paper_2fig_5d.png'),
+       width=12, height=8, units='in', dpi=900)
 
 #***********************************************************************************************************************
 
@@ -1630,33 +1914,30 @@ cartographeR(dt=pc_dt, map_varname = 'cjest_le', map_label = 'Life Expectancy',
              scale_type='cont')
 
 #create plot of life expectancy distributions
-ggplot(index_dt, aes(rank %>% as.factor, le)) + 
-  geom_violin(aes(col = rank %>% as.factor, fill = rank %>% as.factor), alpha = 0.25)+
-  labs(x = "Index", y = "Life Expectancy",
-       title = "Relationship between EHD Rank and Life Expectancy",
-       subtitle = "Average Life Expectancy Between 2015-2019 (dotted line represents state average of 80.3 years)"
-  ) +
-  geom_vline(xintercept = 8.5, linetype='dashed', color='dark red') +
-  geom_hline(yintercept = index_dt[1, le_state_average], linetype='dotted', color='dark blue') +
-  scale_x_discrete() +
-  scale_color_manual('Rank', values=cont_colors, na.value = "grey75") +
-  scale_fill_manual('Rank', values=cont_colors, na.value = "grey75") +
-  geom_boxplot(color = "gray20", width = 0.15, coef = 1.5) +
-  annotate("text", x = 9.25, y = 99, label = "Highly Impacted Tracts", vjust = -0.5, color='dark red') +
-  theme_minimal() +
-  theme(legend.position = c(1, .99), legend.justification = c(1, 1),
-        plot.margin = unit(c(0, 0, 0, 0), "in"))
+# ggplot(index_dt, aes(rank %>% as.factor, le)) + 
+#   geom_violin(aes(col = rank %>% as.factor, fill = rank %>% as.factor), alpha = 0.25)+
+#   labs(x = "Index", y = "Life Expectancy",
+#        title = "Relationship between EHD Rank and Life Expectancy",
+#        subtitle = "Average Life Expectancy Between 2015-2019 (dotted line represents state average of 80.3 years)"
+#   ) +
+#   geom_vline(xintercept = 8.5, linetype='dashed', color='dark red') +
+#   geom_hline(yintercept = index_dt[1, le_state_average], linetype='dotted', color='dark blue') +
+#   scale_x_discrete() +
+#   scale_color_manual('Rank', values=cont_colors, na.value = "grey75") +
+#   scale_fill_manual('Rank', values=cont_colors, na.value = "grey75") +
+#   geom_boxplot(color = "gray20", width = 0.15, coef = 1.5) +
+#   annotate("text", x = 9.25, y = 99, label = "Highly Impacted Tracts", vjust = -0.5, color='dark red') +
+#   theme_minimal() +
+#   theme(legend.position = c(1, .99), legend.justification = c(1, 1),
+#         plot.margin = unit(c(0, 0, 0, 0), "in"))
 
 #models with LE
-mod <- lm(cjest_le ~ pollution*pops, data=le_reg_dt)
-mod2 <- lm(cjest_le ~ Env_Effects + Env_Exposures + Sens_Pops + Soc_Factors, data=le_reg_dt)
-mod3 <- lm(cjest_le ~ ehd_score, data=le_reg_dt)
-mod4 <- lm(cjest_le ~ ehd_pca, data=pc_dt)
+mod1 <- lm(cjest_le ~ ehd_score, data=le_reg_dt)
+mod2 <- lm(cjest_le ~ ehd_pc, data=pc_dt)
 
-stargazer(mod, mod2, mod3, mod4, 
+stargazer(mod1, mod2, 
           type='html') %>%
   capture.output(file=file.path(out.dir, 'table_3.html'))
-
 
 #make some hexplots looking at the relationship between trans and LE
 themHex <- function(dt, this_theme) {
@@ -1664,10 +1945,14 @@ themHex <- function(dt, this_theme) {
   ggplot(dt[theme==this_theme & type %in% c('minmax', 'zscore', 'centile', 'decile')], 
          aes(x=value, y=cjest_le)) +
     geom_hex(aes(fill=log(..count..), alpha=log(..count..)), bins=35) +
-    geom_smooth(method='lm', color='black', linetype='dashed') +
+    geom_smooth(method='scam', 
+                # b-spline monotonic deceasing
+                # see ?shape.constrained.smooth.terms
+                formula = y ~ s(x, k = 5, bs = "mpd"),
+                color='black', linetype='dashed') +
     scale_fill_viridis(guide='none') +
     scale_y_continuous('Life Expectancy') +
-    scale_x_continuous('Normalized Value', limits=c(0,10)) +
+    scale_x_continuous('Normalized Value', limits=c(0,10), breaks=c(1,5,9)) +
     scale_alpha_continuous(guide='none', range=c(.5,1)) +
     #facet_wrap(indicator~type, ncol=4, strip.position = 'right') +
     facet_grid(rows=vars(indicator_label), cols=vars(type), scales='free') +
@@ -1682,6 +1967,69 @@ themHex <- function(dt, this_theme) {
 pdf(file.path(viz.dir, 'transformations_v_le.pdf'))
 lapply(unique(trans_dt$theme), themHex, dt=trans_dt)
 dev.off()
+
+##simulation study##
+
+#bring in transformed dataset
+sim_dt <- trans_wide_dt[, .(uCode, indicator, theme, indicator_label, 
+                            raw, 
+                            centile, decile, minmax, zscore)] 
+
+#simulation function
+runSims <- function(i, data_dt=sim_dt[theme%like%'Sens']) {
+
+  message('rep ', i)
+  
+  #simulate some betas
+  sim_betas <- 
+    data.table(ind=unique(data_dt$indicator),
+               beta=runif(uniqueN(data_dt$indicator), 0, .25))
+  
+  #make a response var from them
+  this_sim <- data_dt[, .(uCode, indicator, minmax)] %>% 
+    copy %>% 
+    dcast(...~indicator, value.var = 'minmax') %>% 
+    .[, sim_response := t(t(.[, sim_betas$ind, with=F])*sim_betas$beta) %>% rowSums(na.rm=T)]
+  
+  #merge back on
+  data_dt <- merge(data_dt, 
+                  this_sim[, .(uCode, sim_response)],
+                  by='uCode')
+
+  simByType <- function(type, dt) {
+    
+    lm(paste0('sim_response ~ indicator:', type) %>% as.formula, data=dt) %>% 
+      tidy(conf.int = TRUE) %>% 
+      as.data.table %>% 
+      #.[, sim := sim_i] %>% 
+      .[term!='(Intercept)'] %>% 
+      .[, indicator := str_replace_all(term, 'indicator', '') %>% 
+          str_replace_all(paste0(':', type), '')] %>% 
+      .[, term := str_replace_all(indicator, '_', ' ')] %>% 
+      merge(sim_betas, by.x='indicator', by.y='ind') %>% 
+      .[, error:=estimate-beta] %>% 
+      .[, abs_error:=abs(estimate-beta)] %>% 
+      .[, coverage := (beta>conf.low & beta<conf.high)] %>% 
+      .[, norm_type := type]
+    
+  }
+  
+  sim_results <- lapply(unique(trans_dt$type), simByType, dt=data_dt) %>% 
+    rbindlist
+  
+  return(sim_results)
+
+}
+
+tmp <- mclapply(1:100, runSims, mc.cores=4) %>% 
+  rbindlist
+
+tmp[norm_type!='raw', .(mean_error=mean(error), mean_abs_error=mean(abs_error), coverage=sum(coverage)/.N),
+    by=.(indicator, norm_type)] %>% 
+  ggplot(aes(indicator, coverage, fill = norm_type)) +
+  geom_bar(position = "dodge2", stat='identity') +
+  coord_flip() + 
+  theme_minimal()
 
 #run models testing the relationships with 
 mod1 <- lm(cjest_le ~ indicator:value, data=trans_dt[type=='raw'])
@@ -1725,117 +2073,9 @@ ggplot(data = results_dt[term!='(Intercept)'&model!='raw'],
 
 file.path(viz.dir, 'trans_v_le_regression.png') %>% ggsave(height=8, width=12)
 
-#plot the raw data distributions
-ggplot(trans_dt[type=='raw'], aes(value, fill=theme)) +
-  geom_density(alpha=.5) +
-  scale_fill_manual('Themes', values=viridis::turbo(10)[c(1,2,7,10)]) +
-  scale_y_continuous('') +
-  scale_x_continuous('') +
-  facet_wrap(~indicator_label, scales = 'free') +
-  theme_minimal()
-file.path(viz.dir, 'raw_distributions.png') %>% ggsave(height=8, width=12)
+#***********************************************************************************************************************
 
-themDist <- function(dt, this_theme) {
-  
-  plot <-
-    ggplot(dt[theme==this_theme & type %in% c('minmax', 'zscore', 'centile', 'decile')], 
-           aes(value, fill=type)) +
-     geom_density(alpha=.5) +
-     scale_fill_viridis_d('Transformations', option='magma') +
-     scale_y_sqrt('') +
-     scale_x_continuous('') +
-     facet_wrap(~indicator_label) +
-     theme_minimal()
-  
-  plot
-  
-}
-
-pdf(file.path(viz.dir, 'trans_distributions.pdf'))
-lapply(unique(trans_dt$theme), themDist, dt=trans_dt)
-dev.off()
-
-ggplot(trans_dt[!(type=='raw')], aes(value, fill=type)) +
-  geom_density(alpha=.5) +
-  scale_fill_manual('Themes', values=viridis::turbo(10)[c(1,2,7,10)]) +
-  scale_y_continuous('') +
-  scale_x_continuous('') +
-  facet_wrap(~indicator_label, scales='free') +
-  theme_minimal()
-file.path(viz.dir, 'trans_distributions.png') %>% ggsave(height=8, width=12)
-
-#plot the distributions of each indicator in different states of transformation
-ggplot(trans_dt[type!='raw'], aes(x = value, y = forcats::fct_reorder(indicator, theme), 
-                                  fill = 0.5 - abs(0.5 - stat(ecdf)))) +
-  stat_density_ridges(geom = "density_ridges_gradient", calc_ecdf = TRUE) +
-  scale_fill_viridis_c(name = "Tail probability", direction = -1) +
-  facet_wrap(~type) +
-  theme_minimal()
-file.path(viz.dir, 'trans_distributions.png') %>% ggsave(height=8, width=12)
-
-#examine PM2.5 in risk space
-pm_brt_dt <- file.path(data.dir, 'cvd_ihd.csv') %>% fread
-pm_dt <- dt[level==3 & item %like% 'PM 2.5 Concentration', .(GEOID, item, item_short, measure, measure_v1, cjest_le)] %>% 
-  copy %>% 
-  .[, exposure := measure_v1]
-
-#merge on the CVD RR values
-pm_dt <- pm_brt_dt[pm_dt, on=.(exposure), roll='nearest']
-
-trans_dt <- list(trans_dt,
-                 pm_dt[, .(indicator='pm25_concentration', value=mean, type='rr', uCode=GEOID, cjest_le)]) %>% 
-  rbindlist(fill=T, use.names=T)
-
-#plot the raw data distributions
-ggplot(trans_dt[type!='raw' & indicator=='pm25_concentration'], aes(value)) +
-  geom_density(alpha=.6, color='sandybrown') +
-  #scale_fill_manual('Themes', values=viridis::turbo(10)[c(1,2,7,10)]) +
-  scale_y_continuous('') +
-  scale_x_continuous('') +
-  facet_wrap(~type, scales = 'free') +
-  theme_minimal()
-file.path(viz.dir, 'pm_distributions.png') %>% ggsave(height=8, width=12)
-
-trans_dt[type!='raw' & indicator=='pm25_concentration'] %>% 
-  merge(trans_dt[type=='raw' & indicator=='pm25_concentration', .(uCode, raw=value)], 
-        by='uCode') %>% 
-  ggplot(aes(value, raw)) +
-  geom_point(alpha=.6, color='sandybrown') +
-  #scale_fill_manual('Themes', values=viridis::turbo(10)[c(1,2,7,10)]) +
-  scale_y_continuous('') +
-  scale_x_continuous('') +
-  facet_wrap(~type, scales = 'free') +
-  theme_minimal()
-file.path(viz.dir, 'pm_raw_relationship.png') %>% ggsave(height=8, width=12)
-
-#merge to the transformations to compare
-# pm_dt <- merge(pm_dt, trans_dt[indicator=='pm25_concentration'], 
-#                by.x='GEOID', by.y='uCode', 
-#                allow.cartesian=T)
-
-plot <-
-  ggplot(pm_dt, 
-         aes(mean)) +
-  geom_density(alpha=.5) +
-  scale_fill_viridis_d('Transformations', option='magma') +
-  scale_y_sqrt('') +
-  scale_x_continuous('') +
-  facet_wrap(~indicator_label) +
-  theme_minimal()
-  
-ggplot(pm_dt,
-       aes(x=mean, y=value)) +
-  geom_hex(aes(fill=log(..count..), alpha=log(..count..)), bins=35) +
-  geom_smooth(method='lm', color='black', linetype='dashed') +
-  scale_fill_viridis(guide='none') +
-  scale_y_continuous('Life Expectancy') +
-  #scale_x_continuous('PM2.5 RR for CVD', limits=c(0,10)) +
-  scale_alpha_continuous(guide='none', range=c(.5,1)) +
-  #facet_wrap(indicator~type, ncol=4, strip.position = 'right') +
-  facet_grid(cols=vars(type), scales='free') +
-  ggtitle('Indicator Relationship with Life Expectancy', subtitle = this_theme) +
-  theme_minimal() +
-  theme(strip.text.y.right = element_text(angle = 0))
+# ---PCA SCRAP----------------------------------------------------------------------------------------------------------
 
 ##PCA modelling##
 #generate dataset to run PCA 

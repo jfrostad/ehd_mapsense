@@ -96,7 +96,7 @@ cartographeR <- function(shapefile=tract_sf, dt,
   else if(scale_type=='cont') plot <- plot + scale_fill_viridis_c(map_label, option='magma', na.value = "grey75")
   else if(scale_type=='cont_grad') plot <- plot + scale_fill_gradient2(map_label, na.value = "grey75")
   else if(scale_type=='cont_vir') plot <- plot + scale_fill_viridis_c(map_label, option='viridis', na.value = "grey75")
-  else if(scale_type=='class') plot <- plot + scale_fill_manual(map_label, values=viridis::turbo(10)[c(7,8,10,2)])
+  else if(scale_type=='class') plot <- plot + scale_fill_manual(map_label, values=c('#4daf4a', '#984ea3', '#ff7f00', '#377eb8'))
   else if(scale_type=='bivar') plot <- plot + bi_scale_fill(pal='GrPink', guide='none') + bi_theme()
   else if(scale_type=='identity') { plot <- plot + scale_fill_identity(map_label, labels = scale_vals %>% names, 
                                                                        scale_vals,

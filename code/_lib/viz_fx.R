@@ -9,16 +9,17 @@
 #function to create custom maps 
 cartographeR <- function(shapefile=tract_sf, dt,
                          lvl=1, #default is overall rank (2=theme, 3=measure)
+                         geo_var='GEOID', #which variable contains the data we want to map from? standard form is GEOID
                          map_varname, map_label=NA, map_title=NA, tag=NA, #use tag to label files
                          subset_var=NA, subset_val=F,
                          facet_var=F,
-                         filter_geocodes=drop_geocodes,
+                         filter_geocodes=c('53057990100'), #san juan water area with lots of big changes
                          scale_type='cont',
                          scale_vals=NULL,
                          get_plot=F) {
 
   #filter long dataset to appropriate level
-  dt <- dt[level==lvl]
+  if('level' %in% names(dt)) dt <- dt[level==lvl]
 
   #if necessary, subset data
   if(subset_var %>% is.character) {
@@ -38,35 +39,14 @@ cartographeR <- function(shapefile=tract_sf, dt,
   if(scale_type%like%'cont'&!(scale_type%like%'man')) dt[, map_var := get(map_varname)] 
   else dt[, map_var := get(map_varname) %>% as.factor]
   
+  #standardize the geography variable if not standardized already
+  if(geo_var!='GEOID') dt[, GEOID := get(geo_var)]
+  
   #cleanup missing data
   #remove the -1s which represent nonmissing NAs (plot as NA)
   #but note that there can be negatives for the change vars
   if(map_varname %like% 'measure') dt <- dt[map_var>=0]
-  
-  #cap variables for manual scales
-  # if(scale_type%like%'man') {
-  #   
-  #   browser()
-  #   
-  #   message('manual scale specified, capping values at extremes')
-  #   scale_extremes <-
-  #     scale_vals %>%
-  #     names %>% 
-  #     as.numeric %>% 
-  #     summary %>% 
-  #     as.matrix %>% 
-  #     .[c(1,6)]
-  #   
-  #   #cap max
-  #   message(max(dt$map_var %>% as.numeric, na.rm=T), ' capped to ', scale_extremes[2])
-  #   dt[map_var > scale_extremes[2], map_var := scale_extremes[2]]
-  #   
-  #   #cap min
-  #   message(min(dt$map_var, na.rm=T), ' capped to ', scale_extremes[1])
-  #   dt[map_var < scale_extremes[1], map_var := scale_extremes[1]]
-  #   
-  # }
-  
+
   #cleanup geocodes if needed
   if(filter_geocodes %>% is.character) dt <- dt[!(GEOID %in% filter_geocodes)]
 
@@ -82,7 +62,7 @@ cartographeR <- function(shapefile=tract_sf, dt,
     #TODO seems to make the map tilted even though this is the NAD83 proj?
     #coord_sf(crs=4269) + 
     theme_void()
-  
+
   #facet by theme if needed
   if(facet_var %>% is.character) plot <- plot + facet_wrap(reformulate(facet_var))
 

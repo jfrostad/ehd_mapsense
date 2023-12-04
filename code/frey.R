@@ -673,7 +673,7 @@ alt_coin_results_dt <- coin_alt$Data$Aggregated %>%
 
 cartographeR(dt=alt_coin_results_dt, map_varname = 'ehd_rank', map_label = 'EHD Index \n(Equal Intervals)',
              map_title = '',
-             tag = 'coin_results_pca', scale_type='cont')
+             tag = 'coin_results_sens', scale_type='cont')
 
 #plot scatter
 plot_dt <- alt_coin_results_dt[, .(uCode, ehd_rank)] %>% 
